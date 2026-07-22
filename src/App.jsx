@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { RefreshCw, Plus, User, Package, Camera, Calendar } from 'lucide-react';
+import { RefreshCw, Plus, User, Package, Camera } from 'lucide-react';
 
 export default function App() {
   const [rooms, setRooms] = useState([]);
