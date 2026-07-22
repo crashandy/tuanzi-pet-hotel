@@ -17,7 +17,7 @@ export default function App() {
   const [allBookings, setAllBookings] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [currentBooking, setCurrentBooking] = useState(null);
-  const [sameOwnerRooms, setSameOwnerRooms] = useState([]); // 同飼主其他籠位清單
+  const [sameOwnerRooms, setSameOwnerRooms] = useState([]);
   const [showCheckInForm, setShowCheckInForm] = useState(false);
   const [assigningBooking, setAssigningBooking] = useState(null);
   const [editingBooking, setEditingBooking] = useState(null);
@@ -28,9 +28,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
-  // 表單資料狀態 (新增 pet_count, stay_type)
+  // 表單資料狀態
   const [formData, setFormData] = useState({
-    owner_name: '', owner_phone: '', pet_name: '', pet_type: '兔子', pet_count: '1隻', stay_type: '單獨一籠', pet_age: '',
+    owner_name: '', owner_phone: '', pet_name: '', pet_type: '兔子', pet_count: '1', stay_type: '單獨住一籠', pet_age: '',
     pet_gender: '公', is_neutered: '已絕育', check_in_date: '', check_out_date: '',
     water_tool: '水碗', feed_frequency: '一天兩次', hay_type: '提摩西',
     mi_home_id: '', self_provided_items: '', photo_urls: []
@@ -42,21 +42,22 @@ export default function App() {
     fetchAllBookings();
   }, []);
 
-  // 🧮 精準費用計算邏輯
-  const calculateStayDetails = (checkIn, checkOut, petType, petCountStr) => {
-    if (!checkIn || !checkOut) return { days: 0, pricePerDay: 0, discountRate: 1, totalPrice: 0, isMultiPet: false };
+  // 🧮 精準費用試算邏輯 (完全符合實務情境)
+  const calculateStayDetails = (checkIn, checkOut, petType, petCountStr, stayType) => {
+    if (!checkIn || !checkOut) return { days: 0, totalPrice: 0, breakDown: '' };
     
     const start = new Date(checkIn);
     const end = new Date(checkOut);
     const diffTime = end - start;
     const days = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
 
-    if (days <= 0) return { days: 0, pricePerDay: 0, discountRate: 1, totalPrice: 0, isMultiPet: false };
+    if (days <= 0) return { days: 0, totalPrice: 0, breakDown: '' };
 
-    const isMultiPet = petCountStr !== '1隻';
+    const petCount = parseInt(petCountStr, 10) || 1;
     let basePrice = 350;
     let discount = 1;
 
+    // 1. 定價與打折判定
     if (petType === '天竺鼠') {
       basePrice = 300;
       if (days >= 5) discount = 0.9; // 天竺鼠最高滿 5 天 9 折
@@ -67,11 +68,38 @@ export default function App() {
       else if (days >= 5) discount = 0.9; // 滿 5 天 9 折
     }
 
-    const totalPrice = Math.round(days * basePrice * discount);
-    return { days, pricePerDay: basePrice, discountRate: discount, totalPrice, isMultiPet };
+    let totalPrice = 0;
+    let breakDown = '';
+
+    // 2. 算錢邏輯 (分籠 vs 同籠)
+    if (petCount === 1 || stayType === '分開住不同籠') {
+      // 多隻分籠 = 隻數 * 單隻打折價 * 天數
+      const discountedPricePerDay = basePrice * discount;
+      totalPrice = Math.round(petCount * discountedPricePerDay * days);
+      
+      const discountText = discount === 1 ? '原價' : `${discount * 10}折`;
+      breakDown = `${petCount} 隻分籠 (${discountText})：$${basePrice} × ${discount} × ${petCount}隻 × ${days}天 = $${totalPrice}元`;
+    } else if (stayType === '擠同一籠') {
+      // 同籠 = (主籠打折價 * 天數) + (第2隻起每天加 $100 不打折 * 天數)
+      const baseCageFee = Math.round(basePrice * discount * days);
+      const extraPetCount = petCount - 1;
+      const extraPetFee = extraPetCount * 100 * days; // 100元固定不打折
+      
+      totalPrice = baseCageFee + extraPetFee;
+      const discountText = discount === 1 ? '原價' : `${discount * 10}折`;
+      breakDown = `首隻主籠(${discountText}) $${baseCageFee}元 + 陪同第2隻起(${extraPetCount}隻，每隻+$100/天不打折) $${extraPetFee}元 = $${totalPrice}元`;
+    }
+
+    return { days, totalPrice, breakDown, discountRate: discount };
   };
 
-  const currentStayCalc = calculateStayDetails(formData.check_in_date, formData.check_out_date, formData.pet_type, formData.pet_count);
+  const currentStayCalc = calculateStayDetails(
+    formData.check_in_date, 
+    formData.check_out_date, 
+    formData.pet_type, 
+    formData.pet_count, 
+    formData.stay_type
+  );
 
   const fetchRooms = async () => {
     setLoading(true);
@@ -90,7 +118,6 @@ export default function App() {
     if (data) setAllBookings(data);
   };
 
-  // 點擊籠位：自動尋找同電話號碼的其他入住籠位
   const handleRoomClick = async (room) => {
     setSelectedRoom(room);
     setShowCheckInForm(false);
@@ -102,7 +129,6 @@ export default function App() {
       if (booking) {
         setCurrentBooking(booking);
 
-        // 🔍 自動搜尋是否有同電話的其他籠位
         const { data: otherBookings } = await supabase
           .from('bookings')
           .select('room_id, pet_name')
@@ -216,7 +242,7 @@ export default function App() {
           room_id: null,
           owner_name: formData.owner_name,
           owner_phone: formData.owner_phone,
-          pet_name: `${formData.pet_name} (${formData.pet_type} / ${formData.pet_count} / ${formData.stay_type})`,
+          pet_name: `${formData.pet_name} (${formData.pet_type} / ${formData.pet_count}隻 / ${formData.stay_type})`,
           pet_age: formData.pet_age,
           pet_gender: `${formData.pet_gender} (${formData.is_neutered})`,
           check_in_date: formData.check_in_date,
@@ -229,16 +255,16 @@ export default function App() {
             details: formData.self_provided_items,
             estimated_price: currentStayCalc.totalPrice,
             total_days: currentStayCalc.days,
-            is_multi_pet: currentStayCalc.isMultiPet
+            breakdown: currentStayCalc.breakDown
           },
           photo_urls: []
         }
       ]);
 
       if (error) throw error;
-      alert(`🎉 預約單已送出！預估住宿 ${currentStayCalc.days} 天。${currentStayCalc.isMultiPet ? ' (多隻優惠請洽店員報價)' : `金額約 $${currentStayCalc.totalPrice} 元`}`);
+      alert(`🎉 預約單已送出！入住 ${currentStayCalc.days} 天，預估總金額：$${currentStayCalc.totalPrice} 元。`);
       setFormData({
-        owner_name: '', owner_phone: '', pet_name: '', pet_type: '兔子', pet_count: '1隻', stay_type: '單獨一籠', pet_age: '',
+        owner_name: '', owner_phone: '', pet_name: '', pet_type: '兔子', pet_count: '1', stay_type: '單獨住一籠', pet_age: '',
         pet_gender: '公', is_neutered: '已絕育', check_in_date: '', check_out_date: '',
         water_tool: '水碗', feed_frequency: '一天兩次', hay_type: '提摩西',
         mi_home_id: '', self_provided_items: '', photo_urls: []
@@ -261,7 +287,7 @@ export default function App() {
             room_id: selectedRoom.id,
             owner_name: formData.owner_name,
             owner_phone: formData.owner_phone,
-            pet_name: `${formData.pet_name} (${formData.pet_type} / ${formData.pet_count} / ${formData.stay_type})`,
+            pet_name: `${formData.pet_name} (${formData.pet_type} / ${formData.pet_count}隻 / ${formData.stay_type})`,
             pet_age: formData.pet_age,
             pet_gender: `${formData.pet_gender} (${formData.is_neutered})`,
             check_in_date: formData.check_in_date,
@@ -274,7 +300,7 @@ export default function App() {
               details: formData.self_provided_items,
               estimated_price: currentStayCalc.totalPrice,
               total_days: currentStayCalc.days,
-              is_multi_pet: currentStayCalc.isMultiPet
+              breakdown: currentStayCalc.breakDown
             },
             photo_urls: formData.photo_urls
           }
@@ -414,26 +440,39 @@ export default function App() {
               </div>
               <div>
                 <label className="block text-slate-600 font-semibold mb-1">入住隻數*</label>
-                <select className="w-full border rounded-lg p-2 bg-indigo-50/50 font-bold text-indigo-900" value={formData.pet_count} onChange={e => setFormData({...formData, pet_count: e.target.value})}>
-                  <option value="1隻">1 隻</option>
-                  <option value="2隻">2 隻</option>
-                  <option value="3隻">3 隻</option>
-                  <option value="4隻以上">4 隻以上</option>
+                <select 
+                  className="w-full border rounded-lg p-2 bg-indigo-50/50 font-bold text-indigo-900" 
+                  value={formData.pet_count} 
+                  onChange={e => {
+                    const count = e.target.value;
+                    const defaultStay = count === '1' ? '單獨住一籠' : '擠同一籠';
+                    setFormData({...formData, pet_count: count, stay_type: defaultStay});
+                  }}
+                >
+                  <option value="1">1 隻</option>
+                  <option value="2">2 隻</option>
+                  <option value="3">3 隻</option>
+                  <option value="4">4 隻</option>
                 </select>
               </div>
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">入住型態*</label>
-                <select className="w-full border rounded-lg p-2 text-xs" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
-                  <option value="單獨一籠">單獨一籠</option>
-                  <option value="多隻同住一籠">多隻同住一籠</option>
-                  <option value="同飼主分籠入住">同飼主分籠入住</option>
-                </select>
+                <label className="block text-slate-600 font-semibold mb-1">怎麼住？*</label>
+                {formData.pet_count === '1' ? (
+                  <select disabled className="w-full border rounded-lg p-2 bg-slate-100 text-slate-500 text-xs">
+                    <option value="單獨住一籠">🏠 單獨住一籠</option>
+                  </select>
+                ) : (
+                  <select className="w-full border rounded-lg p-2 text-xs font-semibold text-slate-700 bg-amber-50" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
+                    <option value="擠同一籠">👨‍👩‍👧 擠同一籠 (第二隻起每天+$100，不打折)</option>
+                    <option value="分開住不同籠">🚪 分開住不同籠 (每隻各自算一籠費用)</option>
+                  </select>
+                )}
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">寵物姓名* (多隻請用逗號分開)</label>
+                <label className="block text-slate-600 font-semibold mb-1">寵物姓名* (多隻請用逗號隔開)</label>
                 <input required type="text" placeholder="例：糰子、棉花糖" className="w-full border rounded-lg p-2" value={formData.pet_name} onChange={e => setFormData({...formData, pet_name: e.target.value})} />
               </div>
               <div>
@@ -499,25 +538,16 @@ export default function App() {
 
             {/* 💰 即時費用試算卡片 */}
             {currentStayCalc.days > 0 && (
-              <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl text-xs space-y-1">
+              <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl text-xs space-y-1.5">
                 <div className="flex justify-between items-center text-emerald-800 font-bold text-sm border-b border-emerald-200 pb-1.5">
-                  <span className="flex items-center gap-1"><DollarSign size={16}/> 住宿天數與費用估算</span>
-                  <span className="text-base text-emerald-700">
-                    {currentStayCalc.isMultiPet ? '兩隻以上請洽店員報價' : `$${currentStayCalc.totalPrice} 元`}
-                  </span>
+                  <span className="flex items-center gap-1"><DollarSign size={16}/> 住宿天數與費用試算</span>
+                  <span className="text-lg text-emerald-700">${currentStayCalc.totalPrice} 元</span>
                 </div>
-                <div className="flex justify-between text-slate-600 pt-1">
-                  <span>天數計算：{currentStayCalc.days} 天</span>
-                  <span>單隻定價：${currentStayCalc.pricePerDay} / 天</span>
+                <div className="text-slate-600 font-medium">
+                  天數試算：<b>{currentStayCalc.days} 天</b> ({formData.check_in_date} ~ {formData.check_out_date})
                 </div>
-                <div className="text-slate-500 text-[11px]">
-                  {currentStayCalc.isMultiPet ? (
-                    <span className="text-amber-700 font-bold">⚠️ 兩隻以上 (同住/分籠) 享有多隻組合優惠，詳細金額請向店員確認！</span>
-                  ) : (
-                    currentStayCalc.discountRate === 1 
-                      ? (formData.pet_type === '天竺鼠' ? '原價計費 (滿5天享9折)' : '原價計費 (滿5天享9折，滿10天享8折)')
-                      : `${currentStayCalc.discountRate * 10} 折長住優惠已套用！`
-                  )}
+                <div className="text-slate-500 text-[11px] bg-white p-2 rounded border border-emerald-100">
+                  💡 <b>費用明細：</b>{currentStayCalc.breakDown}
                 </div>
               </div>
             )}
@@ -565,7 +595,7 @@ export default function App() {
                     <div className="text-slate-500">時間：{b.check_in_date} ~ {b.check_out_date}</div>
                     {b.self_provided_items?.estimated_price && (
                       <div className="text-emerald-700 font-bold bg-emerald-50 p-1.5 rounded border border-emerald-200">
-                        💰 估算：{b.self_provided_items.total_days} 天 / {b.self_provided_items.is_multi_pet ? '兩隻以上 (請洽店員確認)' : `$${b.self_provided_items.estimated_price}元`}
+                        💰 天數：{b.self_provided_items.total_days} 天 / 試算費用：${b.self_provided_items.estimated_price} 元
                       </div>
                     )}
                     <div className="text-slate-600 bg-white p-2 rounded border truncate">自備物：{b.self_provided_items?.details || '無'}</div>
@@ -738,6 +768,12 @@ export default function App() {
             <div className="bg-amber-50 p-3 rounded-xl text-xs space-y-1">
               <div><b>飼主：</b>{assigningBooking.owner_name} ({assigningBooking.owner_phone})</div>
               <div><b>時間：</b>{assigningBooking.check_in_date} ~ {assigningBooking.check_out_date}</div>
+              {assigningBooking.self_provided_items?.estimated_price && (
+                <div className="text-emerald-700 font-bold bg-emerald-100/60 p-2 rounded">
+                  💰 預估天數：{assigningBooking.self_provided_items.total_days} 天 / 應收費用：${assigningBooking.self_provided_items.estimated_price} 元
+                  <div className="text-[10px] text-slate-500 font-normal mt-0.5">{assigningBooking.self_provided_items.breakdown}</div>
+                </div>
+              )}
               <div><b>自備物品：</b>{assigningBooking.self_provided_items?.details || '無'}</div>
             </div>
 
@@ -813,6 +849,12 @@ export default function App() {
                   </div>
                   <div className="text-slate-600 flex items-center gap-2"><User size={14}/> 飼主：{currentBooking.owner_name} ({currentBooking.owner_phone})</div>
                   {currentBooking.mi_home_id && <div className="text-xs text-indigo-600 font-medium">📷 米家 ID: {currentBooking.mi_home_id}</div>}
+                  {currentBooking.self_provided_items?.estimated_price && (
+                    <div className="text-xs text-emerald-700 font-bold bg-emerald-100/80 p-2 rounded-lg space-y-0.5">
+                      <div>💰 天數：{currentBooking.self_provided_items.total_days} 天 / 應收總金額：${currentBooking.self_provided_items.estimated_price} 元</div>
+                      <div className="text-[10px] text-slate-500 font-normal">{currentBooking.self_provided_items.breakdown}</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
@@ -869,20 +911,33 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-slate-600 font-semibold mb-1">入住隻數*</label>
-                    <select className="w-full border rounded-lg p-2 bg-indigo-50/50 font-bold text-indigo-900" value={formData.pet_count} onChange={e => setFormData({...formData, pet_count: e.target.value})}>
-                      <option value="1隻">1 隻</option>
-                      <option value="2隻">2 隻</option>
-                      <option value="3隻">3 隻</option>
-                      <option value="4隻以上">4 隻以上</option>
+                    <select 
+                      className="w-full border rounded-lg p-2 bg-indigo-50/50 font-bold text-indigo-900" 
+                      value={formData.pet_count} 
+                      onChange={e => {
+                        const count = e.target.value;
+                        const defaultStay = count === '1' ? '單獨住一籠' : '擠同一籠';
+                        setFormData({...formData, pet_count: count, stay_type: defaultStay});
+                      }}
+                    >
+                      <option value="1">1 隻</option>
+                      <option value="2">2 隻</option>
+                      <option value="3">3 隻</option>
+                      <option value="4">4 隻</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-slate-600 font-semibold mb-1">入住型態*</label>
-                    <select className="w-full border rounded-lg p-2 text-xs" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
-                      <option value="單獨一籠">單獨一籠</option>
-                      <option value="多隻同住一籠">多隻同住一籠</option>
-                      <option value="同飼主分籠入住">同飼主分籠入住</option>
-                    </select>
+                    <label className="block text-slate-600 font-semibold mb-1">怎麼住？*</label>
+                    {formData.pet_count === '1' ? (
+                      <select disabled className="w-full border rounded-lg p-2 bg-slate-100 text-slate-500 text-xs">
+                        <option value="單獨住一籠">🏠 單獨住一籠</option>
+                      </select>
+                    ) : (
+                      <select className="w-full border rounded-lg p-2 text-xs font-semibold text-slate-700 bg-amber-50" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
+                        <option value="擠同一籠">👨‍👩‍👧 擠同一籠 (第二隻起每天+$100，不打折)</option>
+                        <option value="分開住不同籠">🚪 分開住不同籠 (每隻各自算一籠費用)</option>
+                      </select>
+                    )}
                   </div>
                 </div>
 
