@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { RefreshCw, Plus, User, Package, Camera } from 'lucide-react';
+import imageCompression from 'browser-image-compression';
 
 export default function App() {
   const [rooms, setRooms] = useState([]);
@@ -10,23 +11,22 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
-  // 表單資料狀態 (已新增：絕育狀態、日期簡化、照片網址)
+  // 表單資料狀態
   const [formData, setFormData] = useState({
     owner_name: '',
     owner_phone: '',
     pet_name: '',
     pet_age: '',
     pet_gender: '公',
-    is_neutered: '已絕育', // ✨ 新增：是否絕育
-    check_in_date: '',    // ✨ 改為純日期 (YYYY-MM-DD)
-    check_out_date: '',   // ✨ 改為純日期 (YYYY-MM-DD)
+    is_neutered: '已絕育',
+    check_in_date: '',
+    check_out_date: '',
     water_tool: '水碗',
     feed_frequency: '一天兩次',
     hay_type: '提摩西',
     mi_home_id: '',
     self_provided_items: '',
-    photo_urls: [],       // ✨ 新增：照片網址陣列
-    notes: ''
+    photo_urls: []
   });
 
   useEffect(() => {
@@ -60,35 +60,43 @@ export default function App() {
     }
   };
 
-  // ✨ 照片上傳處理 (支援拍照或選擇檔案)
+  // ✨ 功能 1：自動壓縮圖片並上傳
   const handleFileUpload = async (event) => {
     try {
       setUploading(true);
-      const file = event.target.files[0];
-      if (!file) return;
+      const imageFile = event.target.files[0];
+      if (!imageFile) return;
 
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}.${fileExt}`;
-      const filePath = `${fileName}`;
+      // 圖片壓縮設定
+      const options = {
+        maxSizeMB: 0.3,          // 最大限制 0.3MB (約 300KB)
+        maxWidthOrHeight: 1200,  // 最大寬/高 1200px
+        useWebWorker: true
+      };
 
-      // 上傳到 Supabase Storage (pet-items)
+      // 執行壓縮
+      const compressedFile = await imageCompression(imageFile, options);
+
+      // 上傳壓縮後的圖片
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+
       const { error: uploadError } = await supabase.storage
         .from('pet-items')
-        .upload(filePath, file);
+        .upload(fileName, compressedFile);
 
       if (uploadError) throw uploadError;
 
-      // 取得圖片公開網址
+      // 取得公開網址
       const { data } = supabase.storage
         .from('pet-items')
-        .getPublicUrl(filePath);
+        .getPublicUrl(fileName);
 
       setFormData(prev => ({
         ...prev,
         photo_urls: [...prev.photo_urls, data.publicUrl]
       }));
 
-      alert('照片上傳成功！');
+      alert('照片已自動壓縮並上傳成功！');
     } catch (error) {
       alert('圖片上傳失敗：' + error.message);
     } finally {
@@ -96,7 +104,7 @@ export default function App() {
     }
   };
 
-  // 辦理入住表單送出
+  // 辦理入住
   const handleCheckInSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -109,7 +117,7 @@ export default function App() {
             owner_phone: formData.owner_phone,
             pet_name: formData.pet_name,
             pet_age: formData.pet_age,
-            pet_gender: `${formData.pet_gender} (${formData.is_neutered})`, // 性別與絕育組合
+            pet_gender: `${formData.pet_gender} (${formData.is_neutered})`,
             check_in_date: formData.check_in_date,
             check_out_date: formData.check_out_date,
             water_tool: formData.water_tool,
@@ -138,17 +146,41 @@ export default function App() {
       alert(`籠位 ${selectedRoom.id} 號辦理入住成功！`);
       setShowCheckInForm(false);
       setSelectedRoom(null);
+      // 重置表單
+      setFormData({
+        owner_name: '', owner_phone: '', pet_name: '', pet_age: '',
+        pet_gender: '公', is_neutered: '已絕育', check_in_date: '', check_out_date: '',
+        water_tool: '水碗', feed_frequency: '一天兩次', hay_type: '提摩西',
+        mi_home_id: '', self_provided_items: '', photo_urls: []
+      });
       fetchRooms();
     } catch (err) {
       alert('入住失敗：' + err.message);
     }
   };
 
-  // 辦理退房
+  // ✨ 功能 2：辦理退房並自動清理雲端照片
   const handleCheckOut = async () => {
-    if (!window.confirm(`確定要為籠位 ${selectedRoom.id} 辦理退房點收嗎？`)) return;
+    if (!window.confirm(`確定要為籠位 ${selectedRoom.id} 辦理退房點收嗎？(系統將同步清理本次入住的照片以節省雲端空間)`)) return;
 
     try {
+      // 1. 如果有照片，解析檔名並從 Supabase Storage 刪除
+      if (currentBooking && currentBooking.photo_urls && currentBooking.photo_urls.length > 0) {
+        const filesToDelete = currentBooking.photo_urls.map(url => {
+          const parts = url.split('/');
+          return parts[parts.length - 1];
+        });
+
+        const { error: deletePhotosError } = await supabase.storage
+          .from('pet-items')
+          .remove(filesToDelete);
+
+        if (deletePhotosError) {
+          console.warn('部分照片刪除失敗:', deletePhotosError.message);
+        }
+      }
+
+      // 2. 更新籠位狀態為空房 (VACANT)
       const { error } = await supabase
         .from('rooms')
         .update({
@@ -159,7 +191,7 @@ export default function App() {
 
       if (error) throw error;
 
-      alert(`籠位 ${selectedRoom.id} 已順利退房！`);
+      alert(`籠位 ${selectedRoom.id} 已順利退房，照片紀錄已自動清理釋放空間！`);
       setSelectedRoom(null);
       fetchRooms();
     } catch (err) {
@@ -265,7 +297,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 顯示拍攝的照片 */}
+                {/* 照片紀錄 */}
                 {currentBooking.photo_urls && currentBooking.photo_urls.length > 0 && (
                   <div>
                     <div className="font-semibold text-slate-700 flex items-center gap-1 mb-2"><Camera size={15}/> 點收照片紀錄：</div>
@@ -285,7 +317,7 @@ export default function App() {
                 </div>
 
                 <button onClick={handleCheckOut} className="w-full mt-4 bg-rose-500 hover:bg-rose-600 text-white font-bold py-2.5 rounded-xl transition">
-                  辦理退房點收
+                  辦理退房點收 (自動清理照片)
                 </button>
               </div>
             )}
@@ -312,7 +344,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 性別與是否絕育 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-slate-600 font-semibold mb-1">寵物性別</label>
@@ -355,7 +386,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 時間改為純日期 (YYYY-MM-DD) */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-slate-600 font-semibold mb-1">入住日期*</label>
@@ -377,13 +407,18 @@ export default function App() {
                   <textarea rows="3" placeholder="例如：自備飼料1包、草架1個、便盆1個、維他命1瓶" className="w-full border rounded-lg p-2 bg-amber-50/40" value={formData.self_provided_items} onChange={e => setFormData({...formData, self_provided_items: e.target.value})} />
                 </div>
 
-                {/* 照片上傳區塊 */}
                 <div>
-                  <label className="block text-slate-600 font-semibold mb-1">現場拍照/上傳物品照片</label>
-                  <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-amber-100 file:text-amber-800 hover:file:bg-amber-200" />
-                  {uploading && <p className="text-xs text-amber-600 mt-1">照片上傳中...</p>}
+                  <label className="block text-slate-600 font-semibold mb-1">現場拍照/上傳物品照片 (自動壓縮)</label>
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    capture="environment" 
+                    onChange={handleFileUpload} 
+                    disabled={uploading} 
+                    className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-amber-100 file:text-amber-800 hover:file:bg-amber-200" 
+                  />
+                  {uploading && <p className="text-xs text-amber-600 mt-1 animate-pulse">⚡ 圖片壓縮並上傳中...</p>}
                   
-                  {/* 已上傳的照片預覽 */}
                   {formData.photo_urls.length > 0 && (
                     <div className="flex gap-2 mt-2 overflow-x-auto">
                       {formData.photo_urls.map((url, i) => (
