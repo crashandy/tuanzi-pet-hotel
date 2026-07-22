@@ -4,7 +4,7 @@ import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Calendar as 
 import imageCompression from 'browser-image-compression';
 
 // 🔑 店員解鎖密碼設定
-const ADMIN_PASSWORD = '8888';
+const ADMIN_PASSWORD = '9358';
 
 export default function App() {
   // 預設強制為 'customer' (顧客預約單)
