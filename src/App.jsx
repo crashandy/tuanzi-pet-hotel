@@ -1,19 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid } from 'lucide-react';
+import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 export default function App() {
-  // 切換頁面模式： 'admin' (店員後台) 或 'customer' (顧客預約)
+  // 切換頁面模式： 'admin' (店員後台), 'customer' (顧客預約), 'calendar' (預約行事曆)
   const [viewMode, setViewMode] = useState('admin');
   
   const [rooms, setRooms] = useState([]);
   const [pendingBookings, setPendingBookings] = useState([]); // 📥 待派房暫存列表
+  const [allBookings, setAllBookings] = useState([]);         // 🗓️ 所有已確認與待指派的預約
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [currentBooking, setCurrentBooking] = useState(null);
   const [showCheckInForm, setShowCheckInForm] = useState(false);
-  const [assigningBooking, setAssigningBooking] = useState(null); // 當前正在分配籠位的暫存預約
+  const [assigningBooking, setAssigningBooking] = useState(null);
   
+  // 行事曆月份切換狀態 (預設目前月份)
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
@@ -38,6 +43,7 @@ export default function App() {
   useEffect(() => {
     fetchRooms();
     fetchPendingBookings();
+    fetchAllBookings();
   }, []);
 
   // 抓取籠位
@@ -52,7 +58,7 @@ export default function App() {
     setLoading(false);
   };
 
-  // 📥 抓取待派房的暫存預約 (status = 'PENDING')
+  // 抓取待派房預約 (status = 'PENDING')
   const fetchPendingBookings = async () => {
     const { data, error } = await supabase
       .from('bookings')
@@ -61,6 +67,15 @@ export default function App() {
       .order('created_at', { ascending: false });
 
     if (!error) setPendingBookings(data || []);
+  };
+
+  // 🗓️ 抓取全部預約紀錄 (供行事曆使用)
+  const fetchAllBookings = async () => {
+    const { data, error } = await supabase
+      .from('bookings')
+      .select('*');
+
+    if (!error) setAllBookings(data || []);
   };
 
   const handleRoomClick = async (room) => {
@@ -111,7 +126,7 @@ export default function App() {
     }
   };
 
-  // 顧客自主線上預約 (送出至暫存區，不派房、不拍照)
+  // 顧客線上預約送出
   const handleCustomerSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -147,13 +162,14 @@ export default function App() {
         mi_home_id: '', self_provided_items: '', photo_urls: []
       });
       fetchPendingBookings();
+      fetchAllBookings();
       setViewMode('admin');
     } catch (err) {
       alert('預約失敗：' + err.message);
     }
   };
 
-  // 店員現場直接辦理入住 (現場填單 + 派房)
+  // 店員現場入住送出
   const handleCheckInSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -192,12 +208,13 @@ export default function App() {
       setShowCheckInForm(false);
       setSelectedRoom(null);
       fetchRooms();
+      fetchAllBookings();
     } catch (err) {
       alert('入住失敗：' + err.message);
     }
   };
 
-  // 店員將「暫存預約」指派房間並現場補拍照完成入住
+  // 店員派房
   const handleAssignRoom = async (bookingId, targetRoomId) => {
     try {
       const { error: bookingError } = await supabase
@@ -220,6 +237,7 @@ export default function App() {
       setAssigningBooking(null);
       fetchRooms();
       fetchPendingBookings();
+      fetchAllBookings();
     } catch (err) {
       alert('指派失敗：' + err.message);
     }
@@ -243,9 +261,28 @@ export default function App() {
       alert(`籠位 ${selectedRoom.id} 已順利退房！`);
       setSelectedRoom(null);
       fetchRooms();
+      fetchAllBookings();
     } catch (err) {
       alert('退房失敗：' + err.message);
     }
+  };
+
+  // 🗓️ 行事曆日期計算邏輯
+  const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+
+  const currentYear = currentMonth.getFullYear();
+  const currentMonthIdx = currentMonth.getMonth();
+  const daysInMonth = getDaysInMonth(currentYear, currentMonthIdx);
+  const firstDayOfWeek = getFirstDayOfMonth(currentYear, currentMonthIdx);
+
+  // 取得特定日期的預約
+  const getBookingsForDate = (dateString) => {
+    return allBookings.filter(b => {
+      // 純日期比對 (YYYY-MM-DD)
+      return b.check_in_date === dateString || b.check_out_date === dateString || 
+             (b.check_in_date <= dateString && b.check_out_date >= dateString);
+    });
   };
 
   return (
@@ -260,19 +297,29 @@ export default function App() {
         <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold">
           <button
             onClick={() => setViewMode('admin')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg transition ${
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition ${
               viewMode === 'admin' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             <LayoutGrid size={15} /> 店員管理看板
           </button>
+
+          <button
+            onClick={() => setViewMode('calendar')}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition ${
+              viewMode === 'calendar' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <CalendarIcon size={15} /> 🗓️ 預約行事曆
+          </button>
+
           <button
             onClick={() => setViewMode('customer')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg transition ${
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition ${
               viewMode === 'customer' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            📝 顧客自主預約頁面
+            📝 顧客預約頁
           </button>
         </div>
       </header>
@@ -280,8 +327,7 @@ export default function App() {
       {/* ----------------- 視圖 1：店員管理後台 ----------------- */}
       {viewMode === 'admin' && (
         <main className="max-w-7xl mx-auto space-y-8">
-          
-          {/* 📥 待派房暫存區 ( Pending Inbox ) */}
+          {/* 📥 待派房暫存區 */}
           <section className="bg-white p-5 rounded-2xl border border-amber-200 shadow-sm">
             <div className="flex justify-between items-center mb-4 border-b pb-3">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -319,7 +365,7 @@ export default function App() {
             )}
           </section>
 
-          {/* 20 個籠位矩陣看板 */}
+          {/* 20 個籠位看板 */}
           <section>
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-slate-800">🏠 20 籠位即時狀態</h2>
@@ -364,7 +410,82 @@ export default function App() {
         </main>
       )}
 
-      {/* ----------------- 視圖 2：顧客自主填單預約頁面 ----------------- */}
+      {/* ----------------- 視圖 2：預約行事曆 (Calendar View) ----------------- */}
+      {viewMode === 'calendar' && (
+        <main className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          {/* 行事曆頂部控制列 */}
+          <div className="flex justify-between items-center mb-6 border-b pb-4">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              🗓️ {currentYear} 年 {currentMonthIdx + 1} 月 住宿預約行事曆
+            </h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentMonth(new Date(currentYear, currentMonthIdx - 1, 1))}
+                className="p-2 border rounded-lg hover:bg-slate-100"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <button
+                onClick={() => setCurrentMonth(new Date())}
+                className="px-3 py-1.5 text-xs border rounded-lg hover:bg-slate-100 font-medium"
+              >
+                回到本月
+              </button>
+              <button
+                onClick={() => setCurrentMonth(new Date(currentYear, currentMonthIdx + 1, 1))}
+                className="p-2 border rounded-lg hover:bg-slate-100"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
+
+          {/* 星期標頭 */}
+          <div className="grid grid-cols-7 gap-1 text-center font-bold text-xs text-slate-500 mb-2">
+            <div className="text-rose-500">日</div>
+            <div>一</div><div>二</div><div>三</div><div>四</div><div>五</div>
+            <div className="text-indigo-500">六</div>
+          </div>
+
+          {/* 月曆日期格子 */}
+          <div className="grid grid-cols-7 gap-1 bg-slate-100 p-1 rounded-xl">
+            {/* 補足月前的空白天數 */}
+            {Array.from({ length: firstDayOfWeek }).map((_, idx) => (
+              <div key={`empty-${idx}`} className="bg-white/50 h-24 rounded-lg"></div>
+            ))}
+
+            {/* 繪製當月每一天 */}
+            {Array.from({ length: daysInMonth }).map((_, idx) => {
+              const dayNum = idx + 1;
+              const dateString = `${currentYear}-${String(currentMonthIdx + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+              const dayBookings = getBookingsForDate(dateString);
+
+              return (
+                <div
+                  key={dayNum}
+                  onClick={() => setSelectedCalendarDate({ date: dateString, bookings: dayBookings })}
+                  className="bg-white h-24 p-1.5 rounded-lg border hover:border-amber-400 cursor-pointer transition flex flex-col justify-between"
+                >
+                  <div className="font-bold text-xs text-slate-700">{dayNum}</div>
+                  
+                  {/* 顯示預約數量標籤 */}
+                  {dayBookings.length > 0 ? (
+                    <div className="space-y-1 overflow-y-auto">
+                      <div className="bg-amber-100 text-amber-800 font-bold px-1.5 py-0.5 rounded text-[10px] truncate">
+                        🐾 {dayBookings.length} 隻入住
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-slate-300">空房可預約</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </main>
+      )}
+
+      {/* ----------------- 視圖 3：顧客自主填單預約頁面 ----------------- */}
       {viewMode === 'customer' && (
         <main className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-emerald-100">
           <div className="text-center mb-6">
@@ -462,6 +583,35 @@ export default function App() {
         </main>
       )}
 
+      {/* ----------------- 彈窗：點擊行事曆日期彈出詳情 ----------------- */}
+      {selectedCalendarDate && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h3 className="text-lg font-bold text-slate-800">📅 {selectedCalendarDate.date} 預約詳情</h3>
+              <button onClick={() => setSelectedCalendarDate(null)} className="text-slate-400 font-bold">✕</button>
+            </div>
+
+            {selectedCalendarDate.bookings.length === 0 ? (
+              <p className="text-slate-400 text-xs py-4 text-center">當天目前無預約客，仍有 20 個空房可以接待！</p>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {selectedCalendarDate.bookings.map((b) => (
+                  <div key={b.id} className="bg-slate-50 p-3 rounded-xl border text-xs space-y-1">
+                    <div className="flex justify-between font-bold text-slate-800">
+                      <span>🐾 {b.pet_name} ({b.pet_gender})</span>
+                      <span className="text-indigo-600">{b.status === 'CONFIRMED' ? `籠位 ${String(b.room_id).padStart(2, '0')}` : '待派房'}</span>
+                    </div>
+                    <div className="text-slate-500">飼主: {b.owner_name} ({b.owner_phone})</div>
+                    <div className="text-slate-400">入住區間: {b.check_in_date} ~ {b.check_out_date}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ----------------- 彈窗：店員為暫存預約【拍照 + 派房】 ----------------- */}
       {assigningBooking && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
@@ -501,9 +651,6 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              {rooms.filter(r => r.status === 'VACANT').length === 0 && (
-                <p className="text-xs text-rose-500 mt-1">目前已無空籠，請先為其他房間辦理退房。</p>
-              )}
             </div>
           </div>
         </div>
