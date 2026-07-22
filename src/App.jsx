@@ -119,8 +119,8 @@ export default function App() {
         .from('bookings')
         .insert([
           {
-            status: 'PENDING', // 標註為暫存
-            room_id: null,     // 暫不指派籠位
+            status: 'PENDING',
+            room_id: null,
             owner_name: formData.owner_name,
             owner_phone: formData.owner_phone,
             pet_name: formData.pet_name,
@@ -140,7 +140,6 @@ export default function App() {
       if (error) throw error;
 
       alert('🎉 預約單已成功送出！請於入住當天至現場由店員為您點收物品與安排籠位。');
-      // 重置表單並切換回後台
       setFormData({
         owner_name: '', owner_phone: '', pet_name: '', pet_age: '',
         pet_gender: '公', is_neutered: '已絕育', check_in_date: '', check_out_date: '',
@@ -201,19 +200,17 @@ export default function App() {
   // 店員將「暫存預約」指派房間並現場補拍照完成入住
   const handleAssignRoom = async (bookingId, targetRoomId) => {
     try {
-      // 1. 更新預約單狀態為 CONFIRMED 並寫入 room_id
       const { error: bookingError } = await supabase
         .from('bookings')
         .update({
           status: 'CONFIRMED',
           room_id: targetRoomId,
-          photo_urls: formData.photo_urls // 寫入現場拍的照片
+          photo_urls: formData.photo_urls
         })
         .eq('id', bookingId);
 
       if (bookingError) throw bookingError;
 
-      // 2. 更新籠位為 OCCUPIED
       await supabase
         .from('rooms')
         .update({ status: 'OCCUPIED', current_booking_id: bookingId })
@@ -480,7 +477,6 @@ export default function App() {
               <div><b>自備物品：</b>{assigningBooking.self_provided_items?.details || '無'}</div>
             </div>
 
-            {/* 現場拍照區塊 */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">現場拍照點收物品 (自動壓縮)</label>
               <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} className="w-full text-xs text-slate-500" />
@@ -492,7 +488,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 指派空籠區塊 */}
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">選擇要放入的空籠：</label>
               <div className="grid grid-cols-4 gap-2">
@@ -532,7 +527,6 @@ export default function App() {
               </div>
             )}
 
-            {/* 入住中詳情 */}
             {selectedRoom.status === 'OCCUPIED' && currentBooking && (
               <div className="space-y-4 text-sm">
                 <div className="bg-amber-50/60 p-4 rounded-xl border border-amber-200/60 space-y-2">
@@ -574,7 +568,6 @@ export default function App() {
               </div>
             )}
 
-            {/* 現場入住表單 */}
             {selectedRoom.status === 'VACANT' && showCheckInForm && (
               <form onSubmit={handleCheckInSubmit} className="space-y-4 text-sm">
                 <div className="grid grid-cols-2 gap-3">
