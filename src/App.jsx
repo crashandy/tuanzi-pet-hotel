@@ -3,13 +3,13 @@ import { supabase } from './supabaseClient';
 import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Lock, Unlock, Trash2, Edit3 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
-// 🔑 店員解鎖密碼設定 (可依需求更換)
-const ADMIN_PASSWORD = '9358';
+// 🔑 店員解鎖密碼設定
+const ADMIN_PASSWORD = '8888';
 
 export default function App() {
-  // 切換頁面模式： 'customer' (預設給顧客用), 'admin' (店員後台), 'calendar' (行事曆)
+  // 預設強制為 'customer' (顧客預約單)
   const [viewMode, setViewMode] = useState('customer');
-  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false); // 店員權限解鎖狀態
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [showPasswordModal, setShowPasswordModal] = useState(false);
 
@@ -20,18 +20,14 @@ export default function App() {
   const [currentBooking, setCurrentBooking] = useState(null);
   const [showCheckInForm, setShowCheckInForm] = useState(false);
   const [assigningBooking, setAssigningBooking] = useState(null);
-
-  // 編輯與刪除預約狀態
   const [editingBooking, setEditingBooking] = useState(null);
 
-  // 行事曆狀態
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
-  // 表單資料狀態
   const [formData, setFormData] = useState({
     owner_name: '', owner_phone: '', pet_name: '', pet_age: '',
     pet_gender: '公', is_neutered: '已絕育', check_in_date: '', check_out_date: '',
@@ -62,7 +58,6 @@ export default function App() {
     if (data) setAllBookings(data);
   };
 
-  // 🔑 解鎖密碼驗證
   const handleUnlockAdmin = (e) => {
     e.preventDefault();
     if (passwordInput === ADMIN_PASSWORD) {
@@ -72,20 +67,16 @@ export default function App() {
       setViewMode('admin');
       alert('🔓 店員權限解鎖成功！');
     } else {
-      alert('❌ 密碼錯誤，請重新輸入！');
+      alert('❌ 密碼錯誤！');
     }
   };
 
-  // 🗑️ 行事曆內刪除/取消預約
   const handleDeleteBooking = async (bookingId) => {
     if (!window.confirm('確定要取消並刪除這筆預約紀錄嗎？')) return;
-
     try {
       const { error } = await supabase.from('bookings').delete().eq('id', bookingId);
       if (error) throw error;
-
-      alert('預約已成功刪除！');
-      // 如果點選的日期有打開，同步更新
+      alert('預約已刪除！');
       if (selectedCalendarDate) {
         setSelectedCalendarDate(prev => ({
           ...prev,
@@ -100,7 +91,6 @@ export default function App() {
     }
   };
 
-  // ✏️ 儲存修改後的預約資料
   const handleUpdateBooking = async (e) => {
     e.preventDefault();
     try {
@@ -120,8 +110,7 @@ export default function App() {
         .eq('id', editingBooking.id);
 
       if (error) throw error;
-
-      alert('預約資料已成功修改！');
+      alert('預約已修改！');
       setEditingBooking(null);
       setSelectedCalendarDate(null);
       fetchAllBookings();
@@ -131,7 +120,6 @@ export default function App() {
     }
   };
 
-  // 圖片壓縮上傳
   const handleFileUpload = async (event) => {
     try {
       setUploading(true);
@@ -147,7 +135,7 @@ export default function App() {
 
       const { data } = supabase.storage.from('pet-items').getPublicUrl(fileName);
       setFormData(prev => ({ ...prev, photo_urls: [...prev.photo_urls, data.publicUrl] }));
-      alert('照片已自動壓縮上傳成功！');
+      alert('照片已自動壓縮上傳！');
     } catch (error) {
       alert('圖片上傳失敗：' + error.message);
     } finally {
@@ -155,7 +143,6 @@ export default function App() {
     }
   };
 
-  // 顧客線上預約送出
   const handleCustomerSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -180,7 +167,6 @@ export default function App() {
       ]);
 
       if (error) throw error;
-
       alert('🎉 預約單已送出！請於入住當天由店員協助辦理點收。');
       setFormData({
         owner_name: '', owner_phone: '', pet_name: '', pet_age: '',
@@ -195,7 +181,6 @@ export default function App() {
     }
   };
 
-  // 店員現場辦理入住
   const handleCheckInSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -234,7 +219,6 @@ export default function App() {
     }
   };
 
-  // 指派籠位
   const handleAssignRoom = async (bookingId, targetRoomId) => {
     try {
       await supabase.from('bookings').update({ status: 'CONFIRMED', room_id: targetRoomId, photo_urls: formData.photo_urls }).eq('id', bookingId);
@@ -250,16 +234,13 @@ export default function App() {
     }
   };
 
-  // 退房
   const handleCheckOut = async () => {
     if (!window.confirm(`確定要為籠位 ${selectedRoom.id} 辦理退房點收？`)) return;
-
     try {
       if (currentBooking?.photo_urls?.length > 0) {
         const filesToDelete = currentBooking.photo_urls.map(url => url.split('/').pop());
         await supabase.storage.from('pet-items').remove(filesToDelete);
       }
-
       await supabase.from('rooms').update({ status: 'VACANT', current_booking_id: null }).eq('id', selectedRoom.id);
       alert(`籠位 ${selectedRoom.id} 已順利退房！`);
       setSelectedRoom(null);
@@ -270,7 +251,16 @@ export default function App() {
     }
   };
 
-  // 行事曆邏輯
+  const handleRoomClick = async (room) => {
+    setSelectedRoom(room);
+    setShowCheckInForm(false);
+    setCurrentBooking(null);
+    if (room.status === 'OCCUPIED' && room.current_booking_id) {
+      const { data: booking } = await supabase.from('bookings').select('*').eq('id', room.current_booking_id).single();
+      if (booking) setCurrentBooking(booking);
+    }
+  };
+
   const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
   const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
 
@@ -285,15 +275,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-amber-50/40 p-4 md:p-8 font-sans">
-      {/* 頂部導覽列 */}
       <header className="max-w-7xl mx-auto mb-6 flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-amber-100 gap-4">
         <div>
           <h1 className="text-xl font-bold text-slate-800">🐰 糰子兔 - 線上預約與管理系統</h1>
         </div>
 
-        {/* 權限控制選項 */}
         <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold items-center gap-1">
-          {/* 顧客預約單按鈕 (公開) */}
           <button
             onClick={() => setViewMode('customer')}
             className={`px-3 py-2 rounded-lg transition ${viewMode === 'customer' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
@@ -301,7 +288,6 @@ export default function App() {
             📝 顧客預約單
           </button>
 
-          {/* 若已解鎖，顯示店員功能按鈕 */}
           {isAdminUnlocked ? (
             <>
               <button
@@ -323,7 +309,6 @@ export default function App() {
               </button>
             </>
           ) : (
-            /* 未解鎖前只顯示店員入口 */
             <button
               onClick={() => setShowPasswordModal(true)}
               className="px-3 py-2 text-slate-400 hover:text-slate-600 flex items-center gap-1"
@@ -334,7 +319,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* ----------------- 視圖 1：顧客專用預約頁面 (預設) ----------------- */}
+      {/* 1. 顧客預約頁面 (預設顯示) */}
       {viewMode === 'customer' && (
         <main className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-emerald-100">
           <div className="text-center mb-6">
@@ -421,7 +406,7 @@ export default function App() {
             </div>
 
             <div>
-              <label className="block text-slate-600 font-semibold mb-1">自備物品清單 (自備飼料、用具、草架等)</label>
+              <label className="block text-slate-600 font-semibold mb-1">自備物品詳細清單 (自備飼料、用具、草架等)</label>
               <textarea rows="3" placeholder="請列出您預計攜帶的物品與份量" className="w-full border rounded-lg p-2 bg-slate-50" value={formData.self_provided_items} onChange={e => setFormData({...formData, self_provided_items: e.target.value})} />
             </div>
 
@@ -432,7 +417,7 @@ export default function App() {
         </main>
       )}
 
-      {/* ----------------- 視圖 2：店員管理看板 ----------------- */}
+      {/* 2. 店員管理看板 (解鎖後可看) */}
       {viewMode === 'admin' && isAdminUnlocked && (
         <main className="max-w-7xl mx-auto space-y-8">
           <section className="bg-white p-5 rounded-2xl border border-amber-200 shadow-sm">
@@ -503,7 +488,7 @@ export default function App() {
         </main>
       )}
 
-      {/* ----------------- 視圖 3：預約行事曆 (Calendar View) ----------------- */}
+      {/* 3. 預約行事曆 (解鎖後可看) */}
       {viewMode === 'calendar' && isAdminUnlocked && (
         <main className="max-w-7xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -552,7 +537,7 @@ export default function App() {
         </main>
       )}
 
-      {/* ----------------- 彈窗 1：店員解鎖密碼彈窗 ----------------- */}
+      {/* 密碼彈窗 */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-xs w-full p-6 shadow-xl text-center space-y-4">
@@ -577,7 +562,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ----------------- 彈窗 2：行事曆點擊預約詳情 (含修改/刪除) ----------------- */}
+      {/* 行事曆預約明細與修改/刪除 */}
       {selectedCalendarDate && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4">
@@ -598,7 +583,6 @@ export default function App() {
                       <div className="text-indigo-600 font-semibold">{b.status === 'CONFIRMED' ? `籠位 ${String(b.room_id).padStart(2, '0')}` : '待派房暫存'}</div>
                     </div>
 
-                    {/* 操作功能：修改/刪除 */}
                     <div className="flex gap-2">
                       <button onClick={() => setEditingBooking(b)} className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100">
                         <Edit3 size={15} />
@@ -615,7 +599,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ----------------- 彈窗 3：編輯預約內容彈窗 ----------------- */}
+      {/* 修改預約單彈窗 */}
       {editingBooking && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
@@ -655,7 +639,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ----------------- 彈窗 4：店員為暫存預約【拍照 + 派房】 ----------------- */}
+      {/* 派房彈窗 */}
       {assigningBooking && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
@@ -699,7 +683,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ----------------- 彈窗 5：20籠位詳情 / 現場入住 ----------------- */}
+      {/* 20 籠位入住/退房點收 */}
       {selectedRoom && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
