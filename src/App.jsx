@@ -508,7 +508,7 @@ export default function App() {
             <form onSubmit={handlePasswordSubmit} className="space-y-3">
               <input
                 type="password"
-                placeholder="請輸入密碼 (預設 8888)"
+                placeholder="請輸入密碼"
                 className="w-full border rounded-xl p-2.5 text-center font-bold tracking-widest focus:ring-2 focus:ring-amber-400 outline-none"
                 value={passwordInput}
                 onChange={e => setPasswordInput(e.target.value)}
