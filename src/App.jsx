@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Calendar as CalendarIcon, Lock, Unlock, Edit3, Trash2 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
-const ADMIN_PASSWORD = '8888'; // 店員解鎖密碼
+const ADMIN_PASSWORD = '9358'; // 店員解鎖密碼
 
 export default function App() {
   // 權限與頁面模式
