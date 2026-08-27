@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, Trash2, CalendarDays, AlertCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
-const ADMIN_PASSWORD = "8888";
+const ADMIN_PASSWORD = "9358";
 
 export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' | 'admin' | 'calendar'
