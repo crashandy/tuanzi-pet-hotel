@@ -160,7 +160,7 @@ export default function App() {
         status: 'CONFIRMED',
         room_id: primaryRoomId,
         photo_urls: formData.photo_urls,
-        assigned_rooms: assignTargetRooms // 記錄分籠籠號陣列
+        assigned_rooms: assignTargetRooms
       }).eq('id', assigningBooking.id);
 
       if (updateErr) throw updateErr;
@@ -278,12 +278,19 @@ export default function App() {
         </div>
       </header>
 
-      {/* 密碼彈窗 */}
+      {/* 密碼彈窗 (已移除預設密碼提示) */}
       {showPasswordModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <form onSubmit={handleUnlockAdmin} className="bg-white p-6 rounded-2xl max-w-xs w-full space-y-4 shadow-xl">
             <h3 className="font-bold text-center">請輸入店員通行密碼</h3>
-            <input type="password" required placeholder="請輸入密碼" className="w-full border rounded-xl p-2.5 text-center text-lg" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} />
+            <input 
+              type="password" 
+              required 
+              placeholder="請輸入密碼" 
+              className="w-full border rounded-xl p-2.5 text-center text-lg" 
+              value={passwordInput} 
+              onChange={e => setPasswordInput(e.target.value)} 
+            />
             <div className="flex gap-2">
               <button type="button" onClick={() => setShowPasswordModal(false)} className="w-1/2 py-2 text-xs text-slate-500">取消</button>
               <button type="submit" className="w-1/2 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl">驗證解鎖</button>
@@ -510,7 +517,7 @@ export default function App() {
         </main>
       )}
 
-      {/* 視圖 3: 預約行事曆 (依籠數統整，避免多筆灌水) */}
+      {/* 視圖 3: 預約行事曆 */}
       {viewMode === 'calendar' && (
         <main className="max-w-5xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div className="flex justify-between items-center mb-6">
@@ -537,7 +544,7 @@ export default function App() {
         </main>
       )}
 
-      {/* 彈窗：店員現場指派籠位 (強制拍照 & 支援多籠選擇) */}
+      {/* 彈窗：店員現場指派籠位 */}
       {assigningBooking && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
@@ -553,7 +560,7 @@ export default function App() {
               <div><b>自備物品：</b>{assigningBooking.self_provided_items?.details || '無'}</div>
             </div>
 
-            {/* 拍照檢核區塊 (必填) */}
+            {/* 拍照檢核區塊 */}
             <div className="border-t pt-3">
               <label className="block text-xs font-bold text-rose-600 mb-1 flex items-center gap-1">
                 <Camera size={14} /> 現場拍照點收 (必拍項目)*
@@ -571,7 +578,7 @@ export default function App() {
               )}
             </div>
 
-            {/* 空籠選擇 (可多選) */}
+            {/* 空籠選擇 */}
             <div className="border-t pt-3">
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 選擇空籠位 (若分籠可複選)：
