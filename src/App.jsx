@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, Trash2, CalendarDays, AlertCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
-const ADMIN_PASSWORD = "9358";
+const ADMIN_PASSWORD = "8888";
 
 export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' | 'admin' | 'calendar'
@@ -283,7 +283,7 @@ export default function App() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <form onSubmit={handleUnlockAdmin} className="bg-white p-6 rounded-2xl max-w-xs w-full space-y-4 shadow-xl">
             <h3 className="font-bold text-center">請輸入店員通行密碼</h3>
-            <input type="password" required placeholder="預設 8888" className="w-full border rounded-xl p-2.5 text-center text-lg" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} />
+            <input type="password" required placeholder="請輸入密碼" className="w-full border rounded-xl p-2.5 text-center text-lg" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} />
             <div className="flex gap-2">
               <button type="button" onClick={() => setShowPasswordModal(false)} className="w-1/2 py-2 text-xs text-slate-500">取消</button>
               <button type="submit" className="w-1/2 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl">驗證解鎖</button>
