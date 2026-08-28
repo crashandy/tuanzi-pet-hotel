@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
-import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, ChevronLeft, ChevronRight, CheckCircle2, Circle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const ADMIN_PASSWORD = "8888";
@@ -29,7 +29,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
 
-  // 表單資料狀態 (米家ID預設為「不需要」且必填)
+  // 表單資料狀態
   const initialFormState = {
     owner_name: '',
     owner_phone: '',
@@ -47,7 +47,6 @@ export default function App() {
     hay_type: '提摩西',
     mi_home_id: '不需要',
     self_provided_items: '',
-    notes: '',
     photo_urls: []
   };
 
@@ -76,6 +75,60 @@ export default function App() {
     if (!error) setAllBookings(data || []);
   };
 
+  // 💰 金額試算邏輯
+  const calculatePrice = (petType, petCount, stayType, checkIn, checkOut) => {
+    if (!checkIn || !checkOut) return { days: 0, total: 0, discountText: '' };
+    const start = new Date(checkIn);
+    const end = new Date(checkOut);
+    const diffTime = end - start;
+    const days = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)));
+    if (days <= 0 || isNaN(days)) return { days: 0, total: 0, discountText: '' };
+
+    const count = parseInt(petCount) || 1;
+    let baseRate = petType === '天竺鼠' ? 300 : 350;
+    let discount = 1.0;
+    let discountText = '無折扣 (原價)';
+
+    if (petType === '天竺鼠') {
+      if (days >= 5) {
+        discount = 0.9;
+        discountText = '滿 5 天享 9 折優惠';
+      }
+    } else {
+      if (days >= 10) {
+        discount = 0.8;
+        discountText = '滿 10 天享 8 折優惠';
+      } else if (days >= 5) {
+        discount = 0.9;
+        discountText = '滿 5 天享 9 折優惠';
+      }
+    }
+
+    const discountedDailyRate = baseRate * discount;
+    let total = 0;
+
+    if (count === 1 || stayType === '單獨住一籠') {
+      total = Math.round(discountedDailyRate * days);
+    } else if (stayType === '分開住不同籠') {
+      total = Math.round(count * discountedDailyRate * days);
+    } else if (stayType === '擠同一籠') {
+      const companionDaily = 100; // 同籠陪同費 (不打折)
+      const companionTotal = (count - 1) * companionDaily * days;
+      total = Math.round(discountedDailyRate * days + companionTotal);
+      discountText += ` (含陪同費 $${companionTotal})`;
+    }
+
+    return { days, total, discountText };
+  };
+
+  const calculatedInfo = calculatePrice(
+    formData.pet_type,
+    formData.pet_count,
+    formData.stay_type,
+    formData.check_in_date,
+    formData.check_out_date
+  );
+
   // 密碼解鎖驗證
   const handleUnlockAdmin = (e) => {
     e.preventDefault();
@@ -86,6 +139,39 @@ export default function App() {
       setPasswordInput('');
     } else {
       alert('密碼錯誤！');
+    }
+  };
+
+  // ✅ 切換「已確認客人預約」狀態
+  const handleToggleCustomerConfirmed = async (booking, e) => {
+    e?.stopPropagation();
+    const currentItems = booking.self_provided_items || {};
+    const newConfirmedState = !currentItems.is_customer_confirmed;
+
+    try {
+      const updatedItems = {
+        ...currentItems,
+        is_customer_confirmed: newConfirmedState
+      };
+
+      const { error } = await supabase
+        .from('bookings')
+        .update({ self_provided_items: updatedItems })
+        .eq('id', booking.id);
+
+      if (error) throw error;
+
+      // 即時更新本地狀態
+      fetchPendingBookings();
+      fetchAllBookings();
+      if (selectedDateDetail) {
+        setSelectedDateDetail(prev => ({
+          ...prev,
+          bookings: prev.bookings.map(b => b.id === booking.id ? { ...b, self_provided_items: updatedItems } : b)
+        }));
+      }
+    } catch (err) {
+      alert('更新預約確認狀態失敗：' + err.message);
     }
   };
 
@@ -132,12 +218,14 @@ export default function App() {
         feed_frequency: formData.feed_frequency,
         hay_type: formData.hay_type,
         mi_home_id: formData.mi_home_id || '不需要',
-        self_provided_items: { details: formData.self_provided_items, notes: formData.notes },
-        photo_urls: []
+        self_provided_items: { details: formData.self_provided_items, is_customer_confirmed: false },
+        photo_urls: [],
+        total_price: calculatedInfo.total,
+        assigned_rooms: []
       }]);
 
       if (error) throw error;
-      alert('🎉 預約單已成功送出！請於入住當天至現場由店員為您拍照點收與指派房間。');
+      alert(`🎉 預約單已成功送出！預估住宿金額：$${calculatedInfo.total} 元。請等候店員與您確認，並於入住當天至現場點收。`);
       setFormData(initialFormState);
       fetchPendingBookings();
       fetchAllBookings();
@@ -146,7 +234,7 @@ export default function App() {
     }
   };
 
-  // 店員指派房間 (強制拍照檢核)
+  // 店員指派房間
   const handleConfirmAssign = async () => {
     if (formData.photo_urls.length === 0) {
       alert('⚠️ 現場規定：店員必須拍攝自備物品/寵物照片後方可完成入住！');
@@ -203,7 +291,8 @@ export default function App() {
         feed_frequency: editingBooking.feed_frequency,
         hay_type: editingBooking.hay_type,
         mi_home_id: editingBooking.mi_home_id,
-        self_provided_items: editingBooking.self_provided_items
+        self_provided_items: editingBooking.self_provided_items,
+        total_price: editingBooking.total_price || 0
       }).eq('id', editingBooking.id);
 
       if (error) throw error;
@@ -219,7 +308,7 @@ export default function App() {
 
   // 刪除預約單
   const handleDeleteBooking = async (bookingId) => {
-    if (!window.confirm('確定要刪除這筆預約單嗎？此操作不可逆。')) return;
+    if (!window.confirm('確定要刪除這筆預約單嗎？')) return;
     try {
       const { error } = await supabase.from('bookings').delete().eq('id', bookingId);
       if (error) throw error;
@@ -259,7 +348,7 @@ export default function App() {
         await supabase.storage.from('pet-items').remove(filesToDelete);
       }
 
-      const relatedRooms = currentBooking?.assigned_rooms || [selectedRoom.id];
+      const relatedRooms = currentBooking?.assigned_rooms?.length > 0 ? currentBooking.assigned_rooms : [selectedRoom.id];
       for (const rId of relatedRooms) {
         await supabase.from('rooms').update({ status: 'VACANT', current_booking_id: null }).eq('id', rId);
       }
@@ -285,28 +374,22 @@ export default function App() {
 
     const cells = [];
 
-    // 空白補位
     for (let i = 0; i < startOffset; i++) {
       cells.push(<div key={`empty-${i}`} className="bg-slate-50/50 border border-slate-100 min-h-[90px] rounded-xl"></div>);
     }
 
-    // 實際日期格子
     for (let day = 1; day <= totalDays; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       
-      // 計算當日入住中的預約
       const dayBookings = allBookings.filter(b => {
         if (!b.check_in_date || !b.check_out_date) return false;
         return dateStr >= b.check_in_date && dateStr <= b.check_out_date;
       });
 
-      // 計算當日佔用的總籠數
       let occupiedCages = 0;
       dayBookings.forEach(b => {
         if (b.assigned_rooms && b.assigned_rooms.length > 0) {
           occupiedCages += b.assigned_rooms.length;
-        } else if (b.room_id) {
-          occupiedCages += 1;
         } else {
           occupiedCages += 1;
         }
@@ -328,11 +411,15 @@ export default function App() {
           </div>
 
           <div className="space-y-1 mt-1 overflow-hidden">
-            {dayBookings.slice(0, 2).map((b, idx) => (
-              <div key={idx} className="text-[10px] truncate bg-emerald-50 text-emerald-800 px-1 py-0.5 rounded border border-emerald-100">
-                🐾 {b.pet_name.split(' ')[0]}
-              </div>
-            ))}
+            {dayBookings.slice(0, 2).map((b, idx) => {
+              const isConfirmed = b.self_provided_items?.is_customer_confirmed;
+              return (
+                <div key={idx} className={`text-[10px] truncate px-1 py-0.5 rounded border flex items-center justify-between ${isConfirmed ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                  <span className="truncate">🐾 {b.pet_name.split(' ')[0]}</span>
+                  {isConfirmed && <span className="text-[8px] text-emerald-600 font-bold">✓已確認</span>}
+                </div>
+              );
+            })}
             {dayBookings.length > 2 && (
               <div className="text-[9px] text-slate-400 text-center font-medium">
                 +{dayBookings.length - 2} 筆
@@ -398,7 +485,7 @@ export default function App() {
         <main className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-emerald-100">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold text-emerald-800">🐰 糰子兔 - 線上住宿預約單</h2>
-            <p className="text-xs text-slate-500 mt-1">請填寫基本照護資料，現場將由店員為您拍照點收物品與排房！</p>
+            <p className="text-xs text-slate-500 mt-1">填寫預約與照護習慣，系統自動試算優惠金額！</p>
           </div>
 
           <form onSubmit={handleCustomerSubmit} className="space-y-4 text-sm">
@@ -425,9 +512,9 @@ export default function App() {
               <div>
                 <label className="block text-slate-600 font-semibold mb-1">種類</label>
                 <select className="w-full border rounded-lg p-2" value={formData.pet_type} onChange={e => setFormData({...formData, pet_type: e.target.value})}>
-                  <option value="兔子">兔子</option>
-                  <option value="天竺鼠">天竺鼠</option>
-                  <option value="龍貓">龍貓</option>
+                  <option value="兔子">兔子 ($350/天)</option>
+                  <option value="天竺鼠">天竺鼠 ($300/天)</option>
+                  <option value="龍貓">龍貓 ($350/天)</option>
                 </select>
               </div>
               <div>
@@ -438,7 +525,7 @@ export default function App() {
                 <label className="block text-slate-600 font-semibold mb-1">入住方式</label>
                 <select className="w-full border rounded-lg p-2" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
                   <option value="單獨住一籠">單獨住一籠</option>
-                  <option value="擠同一籠">擠同一籠</option>
+                  <option value="擠同一籠">擠同一籠 (+100/天)</option>
                   <option value="分開住不同籠">分開住不同籠</option>
                 </select>
               </div>
@@ -497,9 +584,22 @@ export default function App() {
               </div>
             </div>
 
+            {/* 💰 住宿天數與費用試算卡片 */}
+            {formData.check_in_date && formData.check_out_date && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs space-y-1">
+                <div className="flex justify-between items-center text-emerald-800 font-bold text-sm">
+                  <span>📅 住宿天數：{calculatedInfo.days} 天</span>
+                  <span>預估總金額：${calculatedInfo.total} 元</span>
+                </div>
+                <div className="text-emerald-600">
+                  優惠說明：{calculatedInfo.discountText}
+                </div>
+              </div>
+            )}
+
             <div>
               <label className="block text-slate-600 font-semibold mb-1">
-                米家 ID* <span className="text-xs font-normal text-slate-400">(必填，無自備攝影機請直接填「不需要」)</span>
+                米家 ID* <span className="text-xs font-normal text-slate-400">(必填，無自備攝影機請填「不需要」)</span>
               </label>
               <input required type="text" className="w-full border rounded-lg p-2 bg-amber-50/20" value={formData.mi_home_id} onChange={e => setFormData({...formData, mi_home_id: e.target.value})} />
             </div>
@@ -510,7 +610,7 @@ export default function App() {
             </div>
 
             <button type="submit" className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition cursor-pointer">
-              送出預約單
+              送出預約單 (預估 ${calculatedInfo.total} 元)
             </button>
           </form>
         </main>
@@ -534,32 +634,62 @@ export default function App() {
               <p className="text-slate-400 text-xs py-2">目前沒有等待派房的線上預約單。</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {pendingBookings.map((b) => (
-                  <div key={b.id} className="bg-amber-50/50 p-4 rounded-xl border border-amber-200 text-xs space-y-2 relative">
-                    <div className="flex justify-between font-bold text-slate-800">
-                      <span>🐾 {b.pet_name}</span>
-                      <button onClick={() => setEditingBooking(b)} className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 bg-white px-2 py-0.5 rounded border cursor-pointer">
-                        <Edit3 size={11} /> 編輯
+                {pendingBookings.map((b) => {
+                  const isConfirmed = b.self_provided_items?.is_customer_confirmed;
+
+                  return (
+                    <div key={b.id} className={`p-4 rounded-xl border text-xs space-y-2 relative transition ${isConfirmed ? 'bg-emerald-50/40 border-emerald-300' : 'bg-amber-50/50 border-amber-200'}`}>
+                      <div className="flex justify-between font-bold text-slate-800 items-center">
+                        <span className="truncate pr-2">🐾 {b.pet_name}</span>
+                        <button onClick={() => setEditingBooking(b)} className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 bg-white px-2 py-0.5 rounded border cursor-pointer shrink-0">
+                          <Edit3 size={11} /> 編輯
+                        </button>
+                      </div>
+
+                      {/* ✅ 已確認客人預約 切換開關 */}
+                      <div className="flex items-center justify-between bg-white p-2 rounded-lg border">
+                        <span className="text-[11px] font-semibold text-slate-600">與客人確認狀態：</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleCustomerConfirmed(b, e)}
+                          className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold transition cursor-pointer ${
+                            isConfirmed 
+                              ? 'bg-emerald-600 text-white shadow-xs' 
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                          }`}
+                        >
+                          {isConfirmed ? (
+                            <>
+                              <CheckCircle2 size={13} /> 已確認預約
+                            </>
+                          ) : (
+                            <>
+                              <Circle size={13} /> 待確認預約
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
+                      <div className="text-slate-500">日期：{b.check_in_date} ~ {b.check_out_date}</div>
+                      <div className="text-emerald-700 font-bold">💰 預約金額：${b.total_price || 0} 元</div>
+                      <div className="text-indigo-600 font-medium">米家 ID: {b.mi_home_id || '不需要'}</div>
+                      <div className="text-slate-600 bg-white p-2 rounded border truncate">
+                        備註物品：{b.self_provided_items?.details || '無'}
+                      </div>
+                      <button
+                        onClick={() => {
+                          setAssigningBooking(b);
+                          setAssignTargetRooms([]);
+                          setFormData(prev => ({ ...prev, photo_urls: [] }));
+                        }}
+                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 rounded-lg transition mt-2 cursor-pointer"
+                      >
+                        現場點交拍照並派房
                       </button>
                     </div>
-                    <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
-                    <div className="text-slate-500">日期：{b.check_in_date} ~ {b.check_out_date}</div>
-                    <div className="text-indigo-600 font-medium">米家 ID: {b.mi_home_id || '不需要'}</div>
-                    <div className="text-slate-600 bg-white p-2 rounded border truncate">
-                      備註物品：{b.self_provided_items?.details || '無'}
-                    </div>
-                    <button
-                      onClick={() => {
-                        setAssigningBooking(b);
-                        setAssignTargetRooms([]);
-                        setFormData(prev => ({ ...prev, photo_urls: [] }));
-                      }}
-                      className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 rounded-lg transition mt-2 cursor-pointer"
-                    >
-                      現場點交拍照並派房
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -642,7 +772,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 星期抬頭 */}
           <div className="grid grid-cols-7 gap-2 text-center font-bold text-xs text-slate-500 py-1">
             <div className="text-rose-500">日</div>
             <div>一</div>
@@ -653,7 +782,6 @@ export default function App() {
             <div className="text-emerald-600">六</div>
           </div>
 
-          {/* 日曆格子 */}
           <div className="grid grid-cols-7 gap-2">
             {renderCalendarDays()}
           </div>
@@ -676,24 +804,38 @@ export default function App() {
               <p className="text-slate-400 text-xs py-4 text-center">當日尚無任何寵物預約。</p>
             ) : (
               <div className="space-y-2.5">
-                {selectedDateDetail.bookings.map((b) => (
-                  <div key={b.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 text-xs space-y-1.5 relative">
-                    <div className="flex justify-between items-center">
-                      <span className="font-bold text-sm text-slate-800">🐾 {b.pet_name}</span>
-                      <div className="flex gap-1">
-                        <button onClick={() => setEditingBooking(b)} className="px-2 py-1 bg-white border rounded text-slate-600 hover:text-slate-900 cursor-pointer">
-                          編輯
-                        </button>
-                        <button onClick={() => handleDeleteBooking(b.id)} className="px-2 py-1 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded cursor-pointer">
-                          刪除
-                        </button>
+                {selectedDateDetail.bookings.map((b) => {
+                  const isConfirmed = b.self_provided_items?.is_customer_confirmed;
+
+                  return (
+                    <div key={b.id} className={`p-3.5 rounded-xl border text-xs space-y-2 relative transition ${isConfirmed ? 'bg-emerald-50/30 border-emerald-200' : 'bg-slate-50/60 border-slate-200'}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-sm text-slate-800 truncate pr-2">🐾 {b.pet_name}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleCustomerConfirmed(b, e)}
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                              isConfirmed ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                            }`}
+                          >
+                            {isConfirmed ? <><CheckCircle2 size={11} />已確認</> : <><Circle size={11} />未確認</>}
+                          </button>
+                          <button onClick={() => setEditingBooking(b)} className="px-2 py-0.5 bg-white border rounded text-slate-600 hover:text-slate-900 cursor-pointer">
+                            編輯
+                          </button>
+                          <button onClick={() => handleDeleteBooking(b.id)} className="px-2 py-0.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded cursor-pointer">
+                            刪除
+                          </button>
+                        </div>
                       </div>
+                      <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
+                      <div className="text-slate-500">住宿區間：{b.check_in_date} ~ {b.check_out_date}</div>
+                      <div className="text-emerald-700 font-bold">金額：${b.total_price || 0} 元</div>
+                      <div className="text-amber-700">狀態：{b.status === 'CONFIRMED' ? `已入住 (籠位: ${b.assigned_rooms?.join(', ') || b.room_id || '未標註'})` : '待派房暫存'}</div>
                     </div>
-                    <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
-                    <div className="text-slate-500">住宿區間：{b.check_in_date} ~ {b.check_out_date}</div>
-                    <div className="text-amber-700">狀態：{b.status === 'CONFIRMED' ? `已入住 (籠位: ${b.assigned_rooms?.join(', ') || b.room_id || '未標註'})` : '待派房暫存'}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -712,6 +854,7 @@ export default function App() {
             <div className="bg-amber-50 p-3 rounded-xl text-xs space-y-1">
               <div><b>飼主：</b>{assigningBooking.owner_name} ({assigningBooking.owner_phone})</div>
               <div><b>日期：</b>{assigningBooking.check_in_date} ~ {assigningBooking.check_out_date}</div>
+              <div><b>預估金額：</b>${assigningBooking.total_price || 0} 元</div>
               <div><b>米家 ID：</b>{assigningBooking.mi_home_id || '不需要'}</div>
               <div><b>自備物品：</b>{assigningBooking.self_provided_items?.details || '無'}</div>
             </div>
@@ -797,6 +940,10 @@ export default function App() {
                 <input required type="text" className="w-full border rounded p-2" value={editingBooking.pet_name} onChange={e => setEditingBooking({...editingBooking, pet_name: e.target.value})} />
               </div>
               <div>
+                <label className="font-semibold block mb-1">應收金額 ($)</label>
+                <input type="number" className="w-full border rounded p-2 font-bold text-emerald-700" value={editingBooking.total_price || 0} onChange={e => setEditingBooking({...editingBooking, total_price: parseInt(e.target.value) || 0})} />
+              </div>
+              <div>
                 <label className="font-semibold block mb-1">米家 ID</label>
                 <input required type="text" className="w-full border rounded p-2" value={editingBooking.mi_home_id || ''} onChange={e => setEditingBooking({...editingBooking, mi_home_id: e.target.value})} />
               </div>
@@ -849,6 +996,9 @@ export default function App() {
                   </div>
                   <div className="text-slate-600 flex items-center gap-2">
                     <User size={14} /> 飼主：{currentBooking.owner_name} ({currentBooking.owner_phone})
+                  </div>
+                  <div className="text-emerald-700 font-bold">
+                    💰 預約總額：${currentBooking.total_price || 0} 元
                   </div>
                   <div className="text-xs text-indigo-600 font-medium">📷 米家 ID: {currentBooking.mi_home_id || '不需要'}</div>
                 </div>
