@@ -679,7 +679,7 @@ export default function App() {
 
             <div>
               <label className="block text-slate-600 font-semibold mb-1">
-                米家 ID* <span className="text-xs font-normal text-slate-400">(必填，無自備攝影機請填「不需要」)</span>
+                米家 ID* <span className="text-xs font-normal text-slate-400">(必填，需要下載米家app並註冊，不需要攝影機請填「不需要」)</span>
               </label>
               <input required type="text" className="w-full border rounded-lg p-2 bg-amber-50/20" value={formData.mi_home_id} onChange={e => setFormData({...formData, mi_home_id: e.target.value})} />
             </div>
