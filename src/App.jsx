@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
-import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, Trash2, CalendarDays, ChevronLeft, ChevronRight, Utensils, Droplets, BookUser, Search, History, CheckCircle2, Circle } from 'lucide-react';
+import { RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, Trash2, ChevronLeft, ChevronRight, Utensils, Droplets, BookUser, Search, History, CheckCircle2, Circle, ArrowUpDown, ArrowRightLeft } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const ADMIN_PASSWORD = "8888";
@@ -23,6 +23,13 @@ export default function App() {
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [currentBooking, setCurrentBooking] = useState(null);
   
+  // 待派房排序狀態：'check_in' (依入住日) | 'created_at' (依填單時間)
+  const [pendingSortMode, setPendingSortMode] = useState('check_in');
+
+  // 籠位調換/對調狀態
+  const [showSwapModal, setShowSwapModal] = useState(false);
+  const [swapTargetRoomId, setSwapTargetRoomId] = useState('');
+
   // 行事曆狀態
   const [currentCalendarDate, setCurrentCalendarDate] = useState(new Date());
   const [selectedDateDetail, setSelectedDateDetail] = useState(null);
@@ -150,6 +157,21 @@ export default function App() {
     const result = calculatePrice(type, count, stayType, booking.check_in_date, booking.check_out_date);
     return result.total;
   };
+
+  // 排序後的未指派預約單
+  const sortedPendingBookings = useMemo(() => {
+    return [...pendingBookings].sort((a, b) => {
+      if (pendingSortMode === 'check_in') {
+        const dateA = a.check_in_date ? new Date(a.check_in_date).getTime() : 0;
+        const dateB = b.check_in_date ? new Date(b.check_in_date).getTime() : 0;
+        return dateA - dateB; // 入住日期近到遠
+      } else {
+        const createA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const createB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return createB - createA; // 填單時間最新排最前
+      }
+    });
+  }, [pendingBookings, pendingSortMode]);
 
   const handlePetCountChange = (count) => {
     const num = Math.max(1, parseInt(count) || 1);
@@ -306,15 +328,13 @@ export default function App() {
     }
   };
 
-  // 🗑️ 統一預約單刪除函式 (含防呆及房間連動釋放)
+  // 🗑️ 預約單刪除 (自動連動釋放籠位)
   const handleDeleteBooking = async (bookingId, e) => {
     if (e) e.stopPropagation();
     if (!window.confirm('確定要刪除這筆預約單嗎？若寵物正在入住中，相關籠位將自動釋放。此操作不可逆！')) return;
 
     try {
-      // 檢查若此預約單有佔用中的房間，先釋放籠位
       await supabase.from('rooms').update({ status: 'VACANT', current_booking_id: null }).eq('current_booking_id', bookingId);
-
       const { error } = await supabase.from('bookings').delete().eq('id', bookingId);
       if (error) throw error;
 
@@ -334,6 +354,57 @@ export default function App() {
     } catch (err) {
       alert('刪除預約單失敗：' + err.message);
     }
+  };
+
+  // 🔄 換籠 / 籠位對調
+  const handleSwapRoom = async () => {
+    const targetId = parseInt(swapTargetRoomId);
+    if (!targetId || targetId === selectedRoom.id) {
+      alert('請選擇有效的目標籠位！');
+      return;
+    }
+
+    const currentRoom = selectedRoom;
+    const targetRoom = rooms.find(r => r.id === targetId);
+    if (!targetRoom) return;
+
+    const sourceBookingId = currentRoom.current_booking_id;
+    const targetBookingId = targetRoom.current_booking_id;
+
+    if (targetRoom.status === 'OCCUPIED' && targetBookingId) {
+      const confirmMsg = `目標籠位【${targetId}號】已有住客！\n確定要將【${currentRoom.id}號】與【${targetId}號】的住客位置互換嗎？`;
+      if (!window.confirm(confirmMsg)) return;
+
+      try {
+        await supabase.from('rooms').update({ current_booking_id: targetBookingId }).eq('id', currentRoom.id);
+        await supabase.from('rooms').update({ current_booking_id: sourceBookingId }).eq('id', targetRoom.id);
+
+        await supabase.from('bookings').update({ room_id: targetId, assigned_rooms: [targetId] }).eq('id', sourceBookingId);
+        await supabase.from('bookings').update({ room_id: currentRoom.id, assigned_rooms: [currentRoom.id] }).eq('id', targetBookingId);
+
+        alert(`籠位 ${currentRoom.id} 號與 ${targetId} 號已成功對調！`);
+      } catch (err) {
+        alert('對調失敗：' + err.message);
+      }
+    } else {
+      if (!window.confirm(`確定要將住客從【${currentRoom.id}號】搬遷至【${targetId}號】空籠嗎？`)) return;
+
+      try {
+        await supabase.from('rooms').update({ status: 'VACANT', current_booking_id: null }).eq('id', currentRoom.id);
+        await supabase.from('rooms').update({ status: 'OCCUPIED', current_booking_id: sourceBookingId }).eq('id', targetId);
+        await supabase.from('bookings').update({ room_id: targetId, assigned_rooms: [targetId] }).eq('id', sourceBookingId);
+
+        alert(`已成功將住客搬遷至 ${targetId} 號籠！`);
+      } catch (err) {
+        alert('搬遷失敗：' + err.message);
+      }
+    }
+
+    setShowSwapModal(false);
+    setSelectedRoom(null);
+    setSwapTargetRoomId('');
+    fetchRooms();
+    fetchAllBookings();
   };
 
   const handleSaveEditBooking = async (e) => {
@@ -369,6 +440,7 @@ export default function App() {
   const handleRoomClick = async (room) => {
     setSelectedRoom(room);
     setCurrentBooking(null);
+    setShowSwapModal(false);
 
     if (room.status === 'OCCUPIED' && room.current_booking_id) {
       const { data, error } = await supabase.from('bookings').select('*').eq('id', room.current_booking_id).single();
@@ -703,20 +775,43 @@ export default function App() {
         <main className="max-w-7xl mx-auto space-y-6">
           {/* 待派房暫存區 */}
           <section className="bg-white p-5 rounded-2xl border border-amber-200 shadow-sm">
-            <div className="flex justify-between items-center mb-4 border-b pb-3">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4 border-b pb-3">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Inbox size={20} className="text-amber-600" /> 📥 待派房預約暫存區 ({pendingBookings.length})
               </h2>
-              <button onClick={fetchPendingBookings} className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1 cursor-pointer">
-                <RefreshCw size={12} /> 刷新
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* 預約單排序切換按鈕 */}
+                <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+                  <button
+                    onClick={() => setPendingSortMode('check_in')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg cursor-pointer transition ${
+                      pendingSortMode === 'check_in' ? 'bg-white text-amber-800 shadow-xs' : 'text-slate-500'
+                    }`}
+                  >
+                    <ArrowUpDown size={12} /> 依入住日期
+                  </button>
+                  <button
+                    onClick={() => setPendingSortMode('created_at')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg cursor-pointer transition ${
+                      pendingSortMode === 'created_at' ? 'bg-white text-amber-800 shadow-xs' : 'text-slate-500'
+                    }`}
+                  >
+                    <ArrowUpDown size={12} /> 依送單時間
+                  </button>
+                </div>
+
+                <button onClick={fetchPendingBookings} className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1 cursor-pointer bg-slate-50 px-2 py-1.5 rounded-lg border">
+                  <RefreshCw size={12} /> 刷新
+                </button>
+              </div>
             </div>
 
-            {pendingBookings.length === 0 ? (
+            {sortedPendingBookings.length === 0 ? (
               <p className="text-slate-400 text-xs py-2">目前沒有等待派房的線上預約單。</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {pendingBookings.map((b) => {
+                {sortedPendingBookings.map((b) => {
                   const isConfirmed = b.self_provided_items?.is_customer_confirmed;
                   const displayPrice = getBookingDisplayPrice(b);
 
@@ -758,7 +853,7 @@ export default function App() {
                       </div>
 
                       <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
-                      <div className="text-slate-700 font-medium">📅 日期：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
+                      <div className="text-slate-700 font-medium">📅 入住：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
                       <div className="text-emerald-700 font-bold">💰 預估金額：${displayPrice} 元</div>
                       <div className="text-indigo-600 font-medium">米家 ID: {b.mi_home_id || '不需要'}</div>
                       <div className="text-slate-600 bg-white p-2 rounded border truncate">
@@ -816,7 +911,7 @@ export default function App() {
                           <div className="font-bold text-slate-800 truncate">🐾 {relatedBooking.pet_name.split(' ')[0]}</div>
                           <div className="text-slate-500 truncate">{relatedBooking.owner_name} ({relatedBooking.owner_phone})</div>
                           
-                          {/* 1. 已派房籠位顯示住宿日期 (到日 YYYY-MM-DD) */}
+                          {/* 籠位顯示住宿日期 (到日) */}
                           <div className="text-[10px] text-amber-900 bg-amber-100/80 px-1.5 py-0.5 rounded truncate font-bold border border-amber-200">
                             📅 {formatDate(relatedBooking.check_in_date)} ~ {formatDate(relatedBooking.check_out_date)}
                           </div>
@@ -1029,7 +1124,6 @@ export default function App() {
                           <button onClick={() => setEditingBooking(b)} className="px-2 py-0.5 bg-white border rounded text-slate-600 hover:text-slate-900 cursor-pointer">
                             編輯
                           </button>
-                          {/* 2. 預約單刪除功能 */}
                           <button onClick={(e) => handleDeleteBooking(b.id, e)} className="px-2 py-0.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded cursor-pointer">
                             刪除
                           </button>
@@ -1189,7 +1283,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 彈窗：籠位詳情 */}
+      {/* 彈窗：籠位詳情 (含換籠與退房) */}
       {selectedRoom && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
@@ -1208,7 +1302,6 @@ export default function App() {
                   <div className="text-slate-600 flex items-center gap-2">
                     <User size={14} /> 飼主：{currentBooking.owner_name} ({currentBooking.owner_phone})
                   </div>
-                  {/* 1. 籠位彈窗明確顯示到日之日期 */}
                   <div className="text-slate-700 font-bold text-xs bg-white/80 p-2 rounded border border-amber-200">
                     📅 住宿日期：{formatDate(currentBooking.check_in_date)} ~ {formatDate(currentBooking.check_out_date)}
                   </div>
@@ -1241,6 +1334,44 @@ export default function App() {
                     </div>
                   </div>
                 )}
+
+                {/* 籠位對調/更換區塊 */}
+                <div className="pt-2 border-t">
+                  {!showSwapModal ? (
+                    <button 
+                      onClick={() => setShowSwapModal(true)} 
+                      className="w-full py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold rounded-xl border border-amber-200 transition cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <ArrowRightLeft size={13} /> 更換籠位 / 籠位對調
+                    </button>
+                  ) : (
+                    <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 space-y-2">
+                      <div className="text-xs font-bold text-amber-900 flex justify-between">
+                        <span>選擇要搬入或對調的目標籠位：</span>
+                        <button onClick={() => setShowSwapModal(false)} className="text-slate-400 text-xs">取消</button>
+                      </div>
+                      <select 
+                        className="w-full border rounded-lg p-2 text-xs bg-white"
+                        value={swapTargetRoomId}
+                        onChange={(e) => setSwapTargetRoomId(e.target.value)}
+                      >
+                        <option value="">-- 請選擇目標籠位 --</option>
+                        {rooms.filter(r => r.id !== selectedRoom.id).map(r => (
+                          <option key={r.id} value={r.id}>
+                            籠位 {String(r.id).padStart(2, '0')} 號 ({r.status === 'OCCUPIED' ? '⚠️ 已有住客，將自動對調' : '🟢 空房可搬遷'})
+                          </option>
+                        ))}
+                      </select>
+                      <button 
+                        onClick={handleSwapRoom}
+                        disabled={!swapTargetRoomId}
+                        className="w-full py-2 bg-amber-600 disabled:bg-slate-300 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                      >
+                        確定調換
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex gap-2 mt-4">
                   <button 
