@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { 
   RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, 
   Trash2, ChevronLeft, ChevronRight, Utensils, Droplets, BookUser, Search, 
-  History, CheckCircle2, Circle, ArrowLeftRight, AlertTriangle 
+  History, CheckCircle2, Circle, ArrowLeftRight, CalendarClock, DollarSign 
 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
@@ -46,6 +46,10 @@ export default function App() {
   // 換籠/互換籠位狀態
   const [showSwapModal, setShowSwapModal] = useState(false);
   const [swapTargetRoomId, setSwapTargetRoomId] = useState('');
+
+  // 延期/修改已指派籠位時間狀態
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [rescheduleData, setRescheduleData] = useState({ check_in_date: '', check_out_date: '' });
 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -96,9 +100,9 @@ export default function App() {
   };
 
   // 💰 精準金額試算公式
-  // 兔子/龍貓：350/天，超過5天9折，超過10天8折
-  // 天竺鼠：300/天，超過5天9折 (無10天8折)
-  // 同籠：第2隻起每隻 +100/天 (最多擠3隻，即加2隻+200/天)，加價不參與打折
+  // 兔子/龍貓：350/天，滿 5 天 9 折，滿 10 天 8 折
+  // 天竺鼠：300/天，滿 5 天 9 折 (無 10 天 8 折)
+  // 同籠：第 2 隻起每隻 +100/天 (最多擠 3 隻)，同籠加價不打折
   const calculatePrice = (petType = '兔子', petCount = 1, stayType = '單獨住一籠', checkIn, checkOut) => {
     if (!checkIn || !checkOut) return { days: 0, total: 0, discountText: '' };
     const start = new Date(checkIn);
@@ -321,7 +325,6 @@ export default function App() {
       return;
     }
 
-    // 檢查是否有選取到非空房的籠位
     const invalidRooms = assignTargetRooms.filter(rId => {
       const target = rooms.find(r => r.id === rId);
       return target && target.status !== 'VACANT';
@@ -442,10 +445,18 @@ export default function App() {
   const handleRoomClick = async (room) => {
     setSelectedRoom(room);
     setCurrentBooking(null);
+    setShowSwapModal(false);
+    setShowRescheduleModal(false);
 
     if (room.status === 'OCCUPIED' && room.current_booking_id) {
       const { data, error } = await supabase.from('bookings').select('*').eq('id', room.current_booking_id).single();
-      if (!error) setCurrentBooking(data);
+      if (!error && data) {
+        setCurrentBooking(data);
+        setRescheduleData({
+          check_in_date: formatDate(data.check_in_date),
+          check_out_date: formatDate(data.check_out_date)
+        });
+      }
     }
   };
 
@@ -466,7 +477,6 @@ export default function App() {
     if (!targetRoomObj) return;
 
     try {
-      // 情況 A：目標籠位是空房 -> 搬遷過去
       if (targetRoomObj.status === 'VACANT') {
         if (!window.confirm(`確定要將住客從 [籠位 ${currentRoomObj.id}] 移至空房 [籠位 ${targetRoomId}] 嗎？`)) return;
 
@@ -477,19 +487,15 @@ export default function App() {
         await supabase.from('bookings').update({ room_id: targetRoomId, assigned_rooms: newAssigned }).eq('id', currentBooking.id);
 
         alert(`已成功將住客移至 籠位 ${targetRoomId}！`);
-      } 
-      // 情況 B：目標籠位已有住客 -> 雙向對調互換
-      else {
+      } else {
         const { data: targetBooking, error: fetchErr } = await supabase.from('bookings').select('*').eq('id', targetRoomObj.current_booking_id).single();
         if (fetchErr || !targetBooking) throw new Error('讀取目標籠位住客資料失敗');
 
         if (!window.confirm(`【籠位互換確認】\n籠位 ${currentRoomObj.id} [${currentBooking.pet_name}] 與\n籠位 ${targetRoomId} [${targetBooking.pet_name}]\n雙方將直接互換房間，確定執行？`)) return;
 
-        // 交換房間紀錄的 current_booking_id
         await supabase.from('rooms').update({ current_booking_id: targetBooking.id }).eq('id', currentRoomObj.id);
         await supabase.from('rooms').update({ current_booking_id: currentBooking.id }).eq('id', targetRoomId);
 
-        // 更新雙方 bookings 表格的 room_id 與 assigned_rooms
         const currentNewRooms = (currentBooking.assigned_rooms || [currentRoomObj.id]).map(id => id === currentRoomObj.id ? targetRoomId : id);
         const targetNewRooms = (targetBooking.assigned_rooms || [targetRoomId]).map(id => id === targetRoomId ? currentRoomObj.id : id);
 
@@ -505,6 +511,79 @@ export default function App() {
       fetchAllBookings();
     } catch (err) {
       alert('換籠操作失敗：' + err.message);
+    }
+  };
+
+  // 🌟 已指派籠位：修改時間 / 延期入住 & 差額計算
+  const rescheduleDiffInfo = useMemo(() => {
+    if (!currentBooking || !rescheduleData.check_in_date || !rescheduleData.check_out_date) {
+      return { days: 0, newTotal: 0, diff: 0, originalTotal: 0 };
+    }
+
+    const petStr = currentBooking.pet_name || '';
+    const type = petStr.includes('天竺鼠') ? '天竺鼠' : (petStr.includes('龍貓') ? '龍貓' : '兔子');
+    const countMatch = petStr.match(/(\d+)隻/);
+    const count = countMatch ? parseInt(countMatch[1]) : 1;
+    const stayType = petStr.includes('擠同一籠') ? '擠同一籠' : (petStr.includes('分開住不同籠') ? '分開住不同籠' : '單獨住一籠');
+
+    const originalTotal = getBookingDisplayPrice(currentBooking);
+    const calculatedNew = calculatePrice(type, count, stayType, rescheduleData.check_in_date, rescheduleData.check_out_date);
+
+    return {
+      days: calculatedNew.days,
+      newTotal: calculatedNew.total,
+      originalTotal,
+      diff: calculatedNew.total - originalTotal
+    };
+  }, [currentBooking, rescheduleData]);
+
+  // 儲存籠位新時間
+  const handleSaveReschedule = async () => {
+    if (!rescheduleData.check_in_date || !rescheduleData.check_out_date) {
+      alert('請填寫完整的入住與退房日期！');
+      return;
+    }
+    if (rescheduleDiffInfo.days <= 0) {
+      alert('退房日期必須晚於入住日期！');
+      return;
+    }
+
+    let alertMessage = `【時間變更確認】\n新住宿期間：${rescheduleData.check_in_date} ~ ${rescheduleData.check_out_date} (共 ${rescheduleDiffInfo.days} 天)\n原預約費用：$${rescheduleDiffInfo.originalTotal} 元\n調整後費用：$${rescheduleDiffInfo.newTotal} 元\n`;
+    if (rescheduleDiffInfo.diff > 0) {
+      alertMessage += `\n👉 需向客人補收：$${rescheduleDiffInfo.diff} 元\n確定要更新時間並同步到行事曆嗎？`;
+    } else if (rescheduleDiffInfo.diff < 0) {
+      alertMessage += `\n👉 費用減少：$${Math.abs(rescheduleDiffInfo.diff)} 元 (退費/折抵)\n確定要更新時間並同步到行事曆嗎？`;
+    } else {
+      alertMessage += `\n金額無變動，確定要更新時間並同步到行事曆嗎？`;
+    }
+
+    if (!window.confirm(alertMessage)) return;
+
+    try {
+      const { error } = await supabase
+        .from('bookings')
+        .update({
+          check_in_date: formatDate(rescheduleData.check_in_date),
+          check_out_date: formatDate(rescheduleData.check_out_date),
+          total_price: rescheduleDiffInfo.newTotal
+        })
+        .eq('id', currentBooking.id);
+
+      if (error) throw error;
+
+      alert(`✅ 住宿時間已成功更新，並已同步至行事曆！${rescheduleDiffInfo.diff > 0 ? `記得現場向客人收取補差額 $${rescheduleDiffInfo.diff} 元。` : ''}`);
+
+      setCurrentBooking(prev => ({
+        ...prev,
+        check_in_date: rescheduleData.check_in_date,
+        check_out_date: rescheduleData.check_out_date,
+        total_price: rescheduleDiffInfo.newTotal
+      }));
+      setShowRescheduleModal(false);
+      fetchAllBookings();
+      fetchRooms();
+    } catch (err) {
+      alert('更新時間失敗：' + err.message);
     }
   };
 
@@ -580,7 +659,7 @@ export default function App() {
       const match = petStr.match(/(\d+)隻/);
       return match ? parseInt(match[1]) : 1;
     }
-    return 1; // 單獨住一籠 或 擠同一籠 皆佔 1 籠
+    return 1;
   };
 
   // 行事曆輔助計算
@@ -602,7 +681,6 @@ export default function App() {
     for (let day = 1; day <= totalDays; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       
-      // ✅ 關鍵修復 1：納入所有預約（包含已入住 CONFIRMED 與 待派房 PENDING）
       const dayBookings = allBookings.filter(b => {
         const inDate = formatDate(b.check_in_date);
         const outDate = formatDate(b.check_out_date);
@@ -610,7 +688,6 @@ export default function App() {
         return dateStr >= inDate && dateStr <= outDate;
       });
 
-      // ✅ 累加當天所有佔用的總籠位數（包含未派房的預估籠數）
       let occupiedCages = 0;
       dayBookings.forEach(b => {
         occupiedCages += calculateBookingCages(b);
@@ -708,7 +785,7 @@ export default function App() {
             <input 
               type="password" 
               required 
-              placeholder="預設" 
+              placeholder="店員密碼" 
               className="w-full border rounded-xl p-2.5 text-center text-lg focus:outline-emerald-500" 
               value={passwordInput} 
               onChange={e => setPasswordInput(e.target.value)} 
@@ -873,7 +950,6 @@ export default function App() {
               </h2>
               
               <div className="flex items-center gap-2">
-                {/* 預約單排序切換 */}
                 <div className="flex items-center text-xs bg-slate-100 p-1 rounded-lg">
                   <span className="text-slate-500 px-1.5">排序：</span>
                   <button 
@@ -918,7 +994,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* ✅ 已確認客人預約 切換按鈕 */}
                       <div className="flex items-center justify-between bg-white p-2 rounded-lg border">
                         <span className="text-[11px] font-semibold text-slate-600">與客人確認狀態：</span>
                         <button
@@ -1398,7 +1473,7 @@ export default function App() {
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3 mb-4">
               <h2 className="text-xl font-bold text-slate-800">籠位 {String(selectedRoom.id).padStart(2, '0')} 號</h2>
-              <button onClick={() => { setSelectedRoom(null); setShowSwapModal(false); }} className="text-slate-400 text-xl font-bold cursor-pointer">✕</button>
+              <button onClick={() => { setSelectedRoom(null); setShowSwapModal(false); setShowRescheduleModal(false); }} className="text-slate-400 text-xl font-bold cursor-pointer">✕</button>
             </div>
 
             {selectedRoom.status === 'OCCUPIED' && currentBooking && (
@@ -1445,11 +1520,90 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 籠位切換／互換按鈕區塊 */}
+                {/* 🌟 核心新功能：延期 / 修改已指派籠位住宿時間 */}
                 <div className="pt-2 border-t">
+                  {!showRescheduleModal ? (
+                    <button
+                      onClick={() => {
+                        setShowRescheduleModal(true);
+                        setShowSwapModal(false);
+                      }}
+                      className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer border border-emerald-200"
+                    >
+                      <CalendarClock size={15} /> 📅 修改住宿時間 / 延期退房 (自動算差額)...
+                    </button>
+                  ) : (
+                    <div className="p-3.5 bg-emerald-50/80 rounded-xl border border-emerald-300 space-y-3">
+                      <div className="flex justify-between items-center text-xs font-bold text-emerald-900 border-b pb-1.5">
+                        <span className="flex items-center gap-1"><CalendarClock size={14}/> 調整住客住宿時間</span>
+                        <button onClick={() => setShowRescheduleModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">取消</button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <label className="block text-slate-600 font-semibold mb-1">新入住日：</label>
+                          <input 
+                            type="date" 
+                            className="w-full border rounded-lg p-1.5 bg-white text-xs" 
+                            value={rescheduleData.check_in_date} 
+                            onChange={e => setRescheduleData({...rescheduleData, check_in_date: e.target.value})} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-slate-600 font-semibold mb-1">新退房日：</label>
+                          <input 
+                            type="date" 
+                            className="w-full border rounded-lg p-1.5 bg-white text-xs" 
+                            value={rescheduleData.check_out_date} 
+                            onChange={e => setRescheduleData({...rescheduleData, check_out_date: e.target.value})} 
+                          />
+                        </div>
+                      </div>
+
+                      {/* 差額提醒看板 */}
+                      {rescheduleDiffInfo.days > 0 ? (
+                        <div className="bg-white p-2.5 rounded-lg border border-emerald-200 text-xs space-y-1">
+                          <div className="flex justify-between text-slate-600">
+                            <span>調整後天數：<b>{rescheduleDiffInfo.days} 天</b></span>
+                            <span>新總費用：<b>${rescheduleDiffInfo.newTotal} 元</b></span>
+                          </div>
+                          <div className="pt-1 border-t flex justify-between items-center font-bold">
+                            <span>費用差額：</span>
+                            {rescheduleDiffInfo.diff > 0 ? (
+                              <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded text-xs animate-pulse">
+                                💵 需補收客人：+${rescheduleDiffInfo.diff} 元
+                              </span>
+                            ) : rescheduleDiffInfo.diff < 0 ? (
+                              <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-xs">
+                                💸 費用縮減：-${Math.abs(rescheduleDiffInfo.diff)} 元
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">金額無變動</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-rose-500 text-xs text-center font-bold">⚠️ 退房日必須大於入住日！</p>
+                      )}
+
+                      <button
+                        onClick={handleSaveReschedule}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs transition cursor-pointer shadow-xs"
+                      >
+                        確認變更時間並同步行事曆
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* 籠位切換／互換按鈕區塊 */}
+                <div>
                   {!showSwapModal ? (
                     <button
-                      onClick={() => setShowSwapModal(true)}
+                      onClick={() => {
+                        setShowSwapModal(true);
+                        setShowRescheduleModal(false);
+                      }}
                       className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                     >
                       <ArrowLeftRight size={14} /> 籠位搬遷或互換籠子...
@@ -1458,7 +1612,7 @@ export default function App() {
                     <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 space-y-2">
                       <div className="flex justify-between items-center text-xs font-bold text-slate-700">
                         <span>選擇要搬入或對調的目標籠位：</span>
-                        <button onClick={() => setShowSwapModal(false)} className="text-slate-400 hover:text-slate-600">取消</button>
+                        <button onClick={() => setShowSwapModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">取消</button>
                       </div>
                       <select 
                         className="w-full border rounded-lg p-2 text-xs bg-white"
@@ -1482,7 +1636,7 @@ export default function App() {
                   )}
                 </div>
 
-                <button onClick={handleCheckOut} className="w-full mt-2 bg-rose-500 hover:bg-rose-600 text-white font-bold py-2.5 rounded-xl transition cursor-pointer">
+                <button onClick={handleCheckOut} className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-2.5 rounded-xl transition cursor-pointer">
                   辦理退房點收 (清理照片並釋放房間)
                 </button>
               </div>
