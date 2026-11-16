@@ -11,7 +11,7 @@ const ADMIN_PASSWORD = "8888";
 
 // 🐰 店內設定
 const TOTAL_CAGES = 20; // 總籠位數
-const LINE_URL = 'https://line.me/R/ti/p/@YOUR_LINE_ID'; // TODO: 換成糰子兔的官方 LINE 連結
+const LINE_URL = 'https://line.me/R/ti/p/@262lvcuh'; // 糰子兔官方 LINE
 const LINE_NAME = '糰子兔官方 LINE'; // 顯示給客人看的 LINE 名稱
 
 // 推算單筆預約佔用的籠位數
