@@ -1,57 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
-import { 
-  RefreshCw, Plus, User, Package, Camera, Inbox, LayoutGrid, Lock, Edit3, 
-  Trash2, ChevronLeft, ChevronRight, Utensils, Droplets, BookUser, Search, 
-  History, CheckCircle2, Circle, ArrowLeftRight, CalendarClock, DollarSign 
+import {
+  RefreshCw, User, Package, Camera, Inbox, LayoutGrid, Edit3,
+  Trash2, ChevronLeft, ChevronRight, BookUser, Search,
+  History, CheckCircle2, Circle, ArrowLeftRight, CalendarClock
 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
+import { LINE_URL, LINE_NAME, findFullDates, formatDate } from './lib/booking';
+import BookingForm from './components/BookingForm';
+import AdminHome from './components/AdminHome';
 
 const ADMIN_PASSWORD = "8888";
-
-// 🐰 店內設定
-const TOTAL_CAGES = 20; // 總籠位數
-const LINE_URL = 'https://line.me/R/ti/p/@262lvcuh'; // 糰子兔官方 LINE
-const LINE_NAME = '糰子兔官方 LINE'; // 顯示給客人看的 LINE 名稱
-
-// 推算單筆預約佔用的籠位數
-const countBookingCages = (booking) => {
-  if (booking.assigned_rooms && booking.assigned_rooms.length > 0) return booking.assigned_rooms.length;
-  const petStr = booking.pet_name || '';
-  if (petStr.includes('分開住不同籠')) {
-    const match = petStr.match(/(\d+)隻/);
-    return match ? parseInt(match[1]) : 1;
-  }
-  return 1;
-};
-
-// 找出住宿期間內「籠位不夠」的日期（只計算待派房與已入住的預約）
-// 以「過夜」計算：10/1~10/3 檢查 10/1、10/2 兩晚
-const findFullDates = (bookings, checkIn, checkOut, neededCages) => {
-  if (!checkIn || !checkOut) return [];
-  const start = new Date(`${String(checkIn).split('T')[0]}T00:00:00Z`);
-  const end = new Date(`${String(checkOut).split('T')[0]}T00:00:00Z`);
-  if (isNaN(start) || isNaN(end) || end <= start) return [];
-
-  const active = (bookings || []).filter(b => b.status === 'PENDING' || b.status === 'CONFIRMED');
-  const full = [];
-  for (let d = new Date(start); d < end; d.setUTCDate(d.getUTCDate() + 1)) {
-    const day = d.toISOString().slice(0, 10);
-    const used = active.reduce((sum, b) => {
-      const bIn = String(b.check_in_date || '').split('T')[0];
-      const bOut = String(b.check_out_date || '').split('T')[0];
-      return bIn <= day && day < bOut ? sum + countBookingCages(b) : sum;
-    }, 0);
-    if (used + neededCages > TOTAL_CAGES) full.push(day);
-  }
-  return full;
-};
-
-// 輔助函式：確保日期一律乾淨顯示為 YYYY-MM-DD
-const formatDate = (dateStr) => {
-  if (!dateStr) return '';
-  return String(dateStr).split('T')[0];
-};
 
 export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' | 'admin' | 'calendar' | 'customers_directory'
@@ -326,6 +285,14 @@ export default function App() {
   // 顧客提交線上預約
   const handleCustomerSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.check_in_date || !formData.check_out_date) {
+      alert('請在月曆上選擇入住日和退房日！');
+      return;
+    }
+    if (formData.mi_home_id !== '不需要' && !String(formData.mi_home_id).trim()) {
+      alert('請填寫米家 ID，或選擇「不需要」。');
+      return;
+    }
     try {
       if (formData.pet_count > 3 && formData.stay_type === '擠同一籠') {
         alert('擠同一籠最多加 2 隻（共 3 隻），超過 3 隻請改選「分開住不同籠」！');
@@ -802,7 +769,7 @@ export default function App() {
           }`}
         >
           <div className="flex justify-between items-center">
-            <span className={`font-bold text-xs ${isOverCapacity ? 'text-rose-700 font-extrabold' : 'text-slate-700'}`}>{day}</span>
+            <span className={`font-bold text-xs ${isOverCapacity ? 'text-rose-700 font-extrabold' : 'text-ink'}`}>{day}</span>
             {occupiedCages > 0 && (
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
                 isOverCapacity ? 'bg-rose-600 text-white animate-pulse' : 'bg-amber-100 text-amber-800'
@@ -822,7 +789,7 @@ export default function App() {
                     ? 'bg-amber-50 text-amber-900 border-amber-200' 
                     : isConfirmed 
                       ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-                      : 'bg-slate-50 text-slate-700 border-slate-200'
+                      : 'bg-slate-50 text-ink border-line'
                 }`}>
                   <span className="truncate">🐾 {b.pet_name.split(' ')[0]}</span>
                   <span className="text-[8px] font-bold shrink-0 ml-1">
@@ -844,39 +811,46 @@ export default function App() {
     return cells;
   };
 
+  const navItems = [
+    { key: 'admin', label: '籠位總覽', icon: <LayoutGrid size={16} /> },
+    { key: 'pending', label: '待派房', icon: <Inbox size={16} />, count: pendingBookings.length },
+    { key: 'calendar', label: '行事曆', icon: <CalendarClock size={16} /> },
+    { key: 'customers_directory', label: '客戶通訊錄', icon: <BookUser size={16} /> },
+    { key: 'customer', label: '顧客預約單', icon: <User size={16} /> },
+  ];
+
   return (
-    <div className="min-h-screen bg-amber-50/40 p-4 md:p-8 font-sans text-slate-800">
-      {/* 頂部導航 */}
-      <header className="max-w-7xl mx-auto mb-6 flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-amber-100">
-        <h1 className="text-xl font-bold flex items-center gap-2">🐰 糰子兔 - 住宿管理系統</h1>
-        <div className="flex items-center gap-2">
-          {!isAdminUnlocked ? (
-            <button onClick={() => setShowPasswordModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold text-slate-700 cursor-pointer">
-              <Lock size={14} /> 店員專用通道
-            </button>
-          ) : (
-            <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold">
-              <button onClick={() => setViewMode('admin')} className={`px-3 py-1.5 rounded-lg cursor-pointer ${viewMode === 'admin' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
-                <LayoutGrid size={14} className="inline mr-1"/> 籠位看板
-              </button>
-              <button onClick={() => setViewMode('calendar')} className={`px-3 py-1.5 rounded-lg cursor-pointer ${viewMode === 'calendar' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
-                🗓️ 預約行事曆
-              </button>
-              <button onClick={() => setViewMode('customers_directory')} className={`px-3 py-1.5 rounded-lg cursor-pointer ${viewMode === 'customers_directory' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500'}`}>
-                <BookUser size={14} className="inline mr-1"/> 📒 常客檔案
-              </button>
-              <button onClick={() => setViewMode('customer')} className={`px-3 py-1.5 rounded-lg cursor-pointer ${viewMode === 'customer' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500'}`}>
-                📝 顧客預約單
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
+    <div className="min-h-screen bg-cream font-sans text-ink">
+      {/* 頂部導航（店員登入後才顯示） */}
+      {isAdminUnlocked && (
+        <header className="bg-white border-b border-[#EADBC8] sticky top-0 z-30">
+          <div className="max-w-[1360px] mx-auto px-4 md:px-6 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+            <div className="font-round text-[22px]">糰子兔・後台</div>
+            <nav className="flex flex-wrap gap-1">
+              {navItems.map((item) => {
+                const on = viewMode === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setViewMode(item.key)}
+                    className={`h-11 px-4 rounded-full inline-flex items-center gap-2 text-[15px] transition ${on ? 'bg-ink text-white font-bold' : 'text-ink hover:bg-oat'}`}
+                  >
+                    {item.icon}
+                    {item.label}
+                    {item.count > 0 && <span className="bg-carrot text-white rounded-full px-2 text-xs font-bold leading-5">{item.count}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        </header>
+      )}
 
       {/* 密碼彈窗 */}
       {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <form onSubmit={handleUnlockAdmin} className="bg-white p-6 rounded-2xl max-w-xs w-full space-y-4 shadow-xl">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <form onSubmit={handleUnlockAdmin} className="bg-white rounded-t-3xl sm:rounded-3xl max-w-xs w-full p-6  space-y-4 shadow-xl">
             <h3 className="font-bold text-center">請輸入店員通行密碼</h3>
             <input 
               type="password" 
@@ -887,8 +861,8 @@ export default function App() {
               onChange={e => setPasswordInput(e.target.value)} 
             />
             <div className="flex gap-2">
-              <button type="button" onClick={() => setShowPasswordModal(false)} className="w-1/2 py-2 text-xs text-slate-500 cursor-pointer">取消</button>
-              <button type="submit" className="w-1/2 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl cursor-pointer">驗證解鎖</button>
+              <button type="button" onClick={() => setShowPasswordModal(false)} className="w-1/2 py-2 text-xs text-bark cursor-pointer">取消</button>
+              <button type="submit" className="w-1/2 py-2 bg-ink text-white text-xs font-bold rounded-xl cursor-pointer">驗證解鎖</button>
             </div>
           </form>
         </div>
@@ -896,185 +870,65 @@ export default function App() {
 
       {/* 視圖 1: 顧客填單頁面 */}
       {viewMode === 'customer' && (
-        <main className="max-w-xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-emerald-100">
-          <div className="text-center mb-6">
-            <h2 className="text-2xl font-bold text-emerald-800">🐰 糰子兔 - 線上住宿預約單</h2>
-            <p className="text-xs text-slate-500 mt-1">填寫預約與照護習慣，系統自動試算優惠金額！</p>
-          </div>
-
-          <form onSubmit={handleCustomerSubmit} className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">飼主姓名*</label>
-                <input required type="text" className="w-full border rounded-lg p-2" value={formData.owner_name} onChange={e => setFormData({...formData, owner_name: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">飼主電話*</label>
-                <input required type="tel" className="w-full border rounded-lg p-2" value={formData.owner_phone} onChange={e => setFormData({...formData, owner_phone: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">寵物姓名*</label>
-                <input required type="text" className="w-full border rounded-lg p-2" value={formData.pet_name} onChange={e => setFormData({...formData, pet_name: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">寵物年齡</label>
-                <input type="text" placeholder="例如：2歲" className="w-full border rounded-lg p-2" value={formData.pet_age} onChange={e => setFormData({...formData, pet_age: e.target.value})} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">種類</label>
-                <select className="w-full border rounded-lg p-2" value={formData.pet_type} onChange={e => setFormData({...formData, pet_type: e.target.value})}>
-                  <option value="兔子">兔子 ($350/天)</option>
-                  <option value="天竺鼠">天竺鼠 ($300/天)</option>
-                  <option value="龍貓">龍貓 ($350/天)</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">隻數</label>
-                <input type="number" min="1" max="10" className="w-full border rounded-lg p-2" value={formData.pet_count} onChange={e => handlePetCountChange(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">入住方式</label>
-                {formData.pet_count === 1 ? (
-                  <select className="w-full border rounded-lg p-2 bg-slate-50" value="單獨住一籠" disabled>
-                    <option value="單獨住一籠">單獨住一籠</option>
-                  </select>
-                ) : (
-                  <select className="w-full border rounded-lg p-2 bg-amber-50/40" value={formData.stay_type} onChange={e => setFormData({...formData, stay_type: e.target.value})}>
-                    {formData.pet_count <= 3 && <option value="擠同一籠">擠同一籠 (+100/天/隻，最多+2隻)</option>}
-                    <option value="分開住不同籠">分開住不同籠</option>
-                  </select>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">性別</label>
-                <select className="w-full border rounded-lg p-2" value={formData.pet_gender} onChange={e => setFormData({...formData, pet_gender: e.target.value})}>
-                  <option value="公">公</option>
-                  <option value="母">母</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">絕育狀態</label>
-                <select className="w-full border rounded-lg p-2" value={formData.is_neutered} onChange={e => setFormData({...formData, is_neutered: e.target.value})}>
-                  <option value="已絕育">已絕育</option>
-                  <option value="未絕育">未絕育</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">飲水習慣</label>
-                <select className="w-full border rounded-lg p-2" value={formData.water_tool} onChange={e => setFormData({...formData, water_tool: e.target.value})}>
-                  <option value="水碗">水碗</option>
-                  <option value="滾珠水瓶">滾珠水瓶</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">餵食頻率</label>
-                <select className="w-full border rounded-lg p-2" value={formData.feed_frequency} onChange={e => setFormData({...formData, feed_frequency: e.target.value})}>
-                  <option value="一天一次">一天一次</option>
-                  <option value="一天兩次">一天兩次</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">主要牧草</label>
-                <select className="w-full border rounded-lg p-2" value={formData.hay_type} onChange={e => setFormData({...formData, hay_type: e.target.value})}>
-                  <option value="提摩西">提摩西</option>
-                  <option value="苜蓿草">苜蓿草</option>
-                  <option value="果樹草/其他">果樹草/其他</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">入住日期*</label>
-                <input required type="date" className="w-full border rounded-lg p-2" value={formData.check_in_date} onChange={e => setFormData({...formData, check_in_date: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">預計退房日期*</label>
-                <input required type="date" className="w-full border rounded-lg p-2" value={formData.check_out_date} onChange={e => setFormData({...formData, check_out_date: e.target.value})} />
-              </div>
-            </div>
-
-            {/* 🚫 客滿提示 */}
-            {formFullDates.length > 0 && (
-              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-800 space-y-2">
-                <div className="font-bold">很抱歉，以下日期目前住宿已滿：</div>
-                <div>{formFullDates.join('、')}</div>
-                <div>請先用 LINE 聯繫我們，確認是否還能安排。</div>
-                <a href={LINE_URL} target="_blank" rel="noopener noreferrer" className="inline-block bg-[#06C755] text-white font-bold px-4 py-2 rounded-lg">
-                  用 LINE 聯繫我們
-                </a>
-              </div>
-            )}
-
-            {/* 💰 住宿天數與費用試算卡片 */}
-            {formData.check_in_date && formData.check_out_date && (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs space-y-1">
-                <div className="flex justify-between items-center text-emerald-800 font-bold text-sm">
-                  <span>📅 住宿天數：{currentFormPriceInfo.days} 天</span>
-                  <span>預估總金額：${currentFormPriceInfo.total} 元</span>
-                </div>
-                <div className="text-emerald-600">
-                  計費說明：{currentFormPriceInfo.discountText}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-slate-600 font-semibold mb-1">
-                米家 ID* <span className="text-xs font-normal text-slate-400">(必填，請先下載米家app，若不需要觀看請填「不需要」)</span>
-              </label>
-              <input required type="text" className="w-full border rounded-lg p-2 bg-amber-50/20" value={formData.mi_home_id} onChange={e => setFormData({...formData, mi_home_id: e.target.value})} />
-            </div>
-
-            <div>
-              <label className="block text-slate-600 font-semibold mb-1">自備物品清單與特殊照護備註</label>
-              <textarea rows="3" placeholder="請填寫帶來的飼料份量、草架、專屬藥品或特殊習性..." className="w-full border rounded-lg p-2 bg-slate-50" value={formData.self_provided_items} onChange={e => setFormData({...formData, self_provided_items: e.target.value})} />
-            </div>
-
-            <button type="submit" disabled={formFullDates.length > 0} className="w-full bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 transition cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed">
-              {formFullDates.length > 0 ? '所選日期已客滿，請用 LINE 聯繫' : `送出預約單 (預估 $${currentFormPriceInfo.total} 元)`}
-            </button>
-          </form>
-        </main>
+        <BookingForm
+          formData={formData}
+          setFormData={setFormData}
+          onPetCountChange={handlePetCountChange}
+          priceInfo={currentFormPriceInfo}
+          fullDates={formFullDates}
+          neededCages={formNeededCages}
+          bookings={allBookings}
+          onSubmit={handleCustomerSubmit}
+          onStaffLogin={isAdminUnlocked ? null : () => setShowPasswordModal(true)}
+        />
       )}
 
+      <div className={viewMode === 'customer' ? '' : 'px-4 md:px-6 py-6'}>
       {/* 視圖 2: 店員管理看板 */}
       {viewMode === 'admin' && (
-        <main className="max-w-7xl mx-auto space-y-6">
+        <AdminHome
+          rooms={rooms}
+          allBookings={allBookings}
+          pendingCount={pendingBookings.length}
+          onRoomClick={handleRoomClick}
+          onAssign={(b) => {
+            setAssigningBooking(b);
+            setAssignTargetRooms([]);
+            setFormData(prev => ({ ...prev, photo_urls: [] }));
+          }}
+          onGoPending={() => setViewMode('pending')}
+          onRefresh={() => { fetchRooms(); fetchAllBookings(); }}
+        />
+      )}
+
+      {/* 視圖：待派房預約 */}
+      {viewMode === 'pending' && (
+        <main className="max-w-[1360px] mx-auto space-y-6">
           {/* 待派房暫存區 */}
           <section className="bg-white p-5 rounded-2xl border border-amber-200 shadow-sm">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 border-b pb-3">
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <h2 className="text-lg font-bold text-ink flex items-center gap-2">
                 <Inbox size={20} className="text-amber-600" /> 📥 待派房預約暫存區 ({pendingBookings.length})
               </h2>
               
               <div className="flex items-center gap-2">
                 <div className="flex items-center text-xs bg-slate-100 p-1 rounded-lg">
-                  <span className="text-slate-500 px-1.5">排序：</span>
+                  <span className="text-bark px-1.5">排序：</span>
                   <button 
                     onClick={() => setPendingSortBy('check_in')} 
-                    className={`px-2 py-0.5 rounded cursor-pointer ${pendingSortBy === 'check_in' ? 'bg-white font-bold text-slate-800 shadow-xs' : 'text-slate-500'}`}
+                    className={`px-2 py-0.5 rounded cursor-pointer ${pendingSortBy === 'check_in' ? 'bg-white font-bold text-ink shadow-xs' : 'text-bark'}`}
                   >
                     📅 入住日 (近到遠)
                   </button>
                   <button 
                     onClick={() => setPendingSortBy('created_at')} 
-                    className={`px-2 py-0.5 rounded cursor-pointer ${pendingSortBy === 'created_at' ? 'bg-white font-bold text-slate-800 shadow-xs' : 'text-slate-500'}`}
+                    className={`px-2 py-0.5 rounded cursor-pointer ${pendingSortBy === 'created_at' ? 'bg-white font-bold text-ink shadow-xs' : 'text-bark'}`}
                   >
                     🕒 最新填單
                   </button>
                 </div>
 
-                <button onClick={fetchPendingBookings} className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1 cursor-pointer">
+                <button onClick={fetchPendingBookings} className="text-xs text-bark hover:text-ink flex items-center gap-1 cursor-pointer">
                   <RefreshCw size={12} /> 刷新
                 </button>
               </div>
@@ -1090,10 +944,10 @@ export default function App() {
 
                   return (
                     <div key={b.id} className={`p-4 rounded-xl border text-xs space-y-2 relative transition ${isConfirmed ? 'bg-emerald-50/40 border-emerald-300' : 'bg-amber-50/50 border-amber-200'}`}>
-                      <div className="flex justify-between items-center font-bold text-slate-800">
+                      <div className="flex justify-between items-center font-bold text-ink">
                         <span className="truncate pr-2">🐾 {b.pet_name}</span>
                         <div className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => setEditingBooking(b)} className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 bg-white px-2 py-0.5 rounded border cursor-pointer">
+                          <button onClick={() => setEditingBooking(b)} className="text-bark hover:text-ink flex items-center gap-0.5 bg-white px-2 py-0.5 rounded border cursor-pointer">
                             <Edit3 size={11} /> 編輯
                           </button>
                           <button onClick={(e) => handleDeletePendingBooking(b.id, e)} className="text-rose-500 hover:bg-rose-50 flex items-center gap-0.5 bg-white px-2 py-0.5 rounded border border-rose-200 cursor-pointer" title="取消並刪除預約">
@@ -1103,14 +957,14 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center justify-between bg-white p-2 rounded-lg border">
-                        <span className="text-[11px] font-semibold text-slate-600">與客人確認狀態：</span>
+                        <span className="text-[11px] font-semibold text-bark">與客人確認狀態：</span>
                         <button
                           type="button"
                           onClick={(e) => handleToggleCustomerConfirmed(b, e)}
                           className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold transition cursor-pointer ${
                             isConfirmed 
-                              ? 'bg-emerald-600 text-white shadow-xs' 
-                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                              ? 'bg-sage text-white shadow-xs' 
+                              : 'bg-slate-100 text-bark hover:bg-slate-200'
                           }`}
                         >
                           {isConfirmed ? (
@@ -1125,11 +979,11 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
-                      <div className="text-slate-500 font-medium">日期：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
+                      <div className="text-bark">飼主：{b.owner_name} ({b.owner_phone})</div>
+                      <div className="text-bark font-medium">日期：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
                       <div className="text-emerald-700 font-bold">💰 預估金額：${displayPrice} 元</div>
                       <div className="text-indigo-600 font-medium">米家 ID: {b.mi_home_id || '不需要'}</div>
-                      <div className="text-slate-600 bg-white p-2 rounded border truncate">
+                      <div className="text-bark bg-white p-2 rounded border truncate">
                         備註物品：{b.self_provided_items?.details || '無'}
                       </div>
                       <button
@@ -1138,7 +992,7 @@ export default function App() {
                           setAssignTargetRooms([]);
                           setFormData(prev => ({ ...prev, photo_urls: [] }));
                         }}
-                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 rounded-lg transition mt-2 cursor-pointer"
+                        className="w-full bg-carrot hover:bg-carrot-dark text-white font-bold py-2 rounded-lg transition mt-2 cursor-pointer"
                       >
                         現場點交拍照並派房
                       </button>
@@ -1149,76 +1003,14 @@ export default function App() {
             )}
           </section>
 
-          {/* 20 個籠位看板 */}
-          <section>
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-bold text-slate-800">🏠 20 籠位即時狀態</h2>
-              <button onClick={fetchRooms} className="text-xs bg-white px-3 py-1.5 rounded-lg border text-slate-600 flex items-center gap-1 cursor-pointer">
-                <RefreshCw size={14} /> 重新整理
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
-              {rooms.map((room) => {
-                const isOccupied = room.status === 'OCCUPIED';
-                const relatedBooking = allBookings.find(b => b.id === room.current_booking_id);
-
-                return (
-                  <div
-                    key={room.id}
-                    onClick={() => handleRoomClick(room)}
-                    className={`cursor-pointer rounded-2xl p-3.5 border-2 transition-all hover:shadow-md flex flex-col justify-between ${
-                      isOccupied ? 'bg-rose-50/70 border-rose-200' : 'bg-white border-slate-200'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="font-bold text-sm text-slate-700">籠位 {String(room.id).padStart(2, '0')}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isOccupied ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                          {isOccupied ? '入住中' : '空房'}
-                        </span>
-                      </div>
-
-                      {isOccupied && relatedBooking ? (
-                        <div className="text-[11px] space-y-1">
-                          <div className="font-bold text-slate-800 truncate">🐾 {relatedBooking.pet_name.split(' ')[0]}</div>
-                          <div className="text-slate-500 truncate">{relatedBooking.owner_name} ({relatedBooking.owner_phone})</div>
-                          
-                          <div className="text-[10px] text-amber-800 bg-amber-100/60 px-1.5 py-0.5 rounded truncate font-medium">
-                            📅 {formatDate(relatedBooking.check_in_date)} ~ {formatDate(relatedBooking.check_out_date)}
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-1 pt-1 text-[10px]">
-                            <div className="bg-white/80 p-1 rounded border border-rose-100 flex items-center gap-0.5 text-slate-700 truncate">
-                              <Utensils size={10} className="text-amber-600 shrink-0"/> {relatedBooking.hay_type || '牧草'}
-                            </div>
-                            <div className="bg-white/80 p-1 rounded border border-rose-100 flex items-center gap-0.5 text-slate-700 truncate">
-                              <Droplets size={10} className="text-blue-500 shrink-0"/> {relatedBooking.water_tool || '飲水'}
-                            </div>
-                          </div>
-                          <div className="text-[9px] text-slate-500 bg-white/60 px-1 py-0.5 rounded text-center truncate">
-                            餵食：{relatedBooking.feed_frequency || '未設定'}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-400 py-6 text-center flex items-center justify-center gap-1">
-                          <Plus size={14} /> 空房可派
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
         </main>
       )}
 
       {/* 視圖 3: 預約行事曆 */}
       {viewMode === 'calendar' && (
-        <main className="max-w-6xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <main className="max-w-6xl mx-auto bg-white p-6 rounded-2xl shadow-sm border border-line space-y-4">
           <div className="flex justify-between items-center border-b pb-4">
-            <h2 className="text-xl font-bold text-slate-800">
+            <h2 className="text-xl font-bold text-ink">
               🗓️ {currentCalendarDate.getFullYear()} 年 {currentCalendarDate.getMonth() + 1} 月 住宿排程
             </h2>
             <div className="flex items-center gap-2">
@@ -1243,7 +1035,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-7 gap-2 text-center font-bold text-xs text-slate-500 py-1">
+          <div className="grid grid-cols-7 gap-2 text-center font-bold text-xs text-bark py-1">
             <div className="text-rose-500">日</div>
             <div>一</div>
             <div>二</div>
@@ -1262,9 +1054,9 @@ export default function App() {
       {/* 視圖 4: 📒 常客通訊錄 */}
       {viewMode === 'customers_directory' && (
         <main className="max-w-6xl mx-auto space-y-4">
-          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-line flex flex-col sm:flex-row justify-between items-center gap-4">
             <div>
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <h2 className="text-lg font-bold text-ink flex items-center gap-2">
                 <BookUser size={20} className="text-amber-600" /> 📒 常客通訊錄 ({customersList.length} 位)
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">系統自動彙整所有預約歷史，點擊可查閱各次住宿紀錄與習慣。</p>
@@ -1286,12 +1078,12 @@ export default function App() {
             {filteredCustomers.map((customer, idx) => (
               <div 
                 key={idx} 
-                className="bg-white p-4 rounded-2xl border border-slate-200 hover:border-amber-400 transition shadow-xs flex flex-col justify-between space-y-3"
+                className="bg-white p-4 rounded-2xl border border-line hover:border-amber-400 transition shadow-xs flex flex-col justify-between space-y-3"
               >
                 <div className="space-y-2">
                   <div className="flex justify-between items-start">
                     <div>
-                      <span className="font-bold text-base text-slate-800">{customer.owner_name}</span>
+                      <span className="font-bold text-base text-ink">{customer.owner_name}</span>
                       <span className="text-xs text-slate-400 ml-2">({customer.owner_phone})</span>
                     </div>
                     <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
@@ -1299,7 +1091,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="bg-slate-50 p-2.5 rounded-xl text-xs space-y-1 text-slate-600 border border-slate-100">
+                  <div className="bg-slate-50 p-2.5 rounded-xl text-xs space-y-1 text-bark border border-slate-100">
                     <div>🐾 <b>寵物名稱：</b>{customer.pet_name}</div>
                     <div>🎂 <b>寵物歲數：</b>{customer.pet_age}</div>
                     <div>📅 <b>第一次住宿：</b>{customer.first_stay_date || '無紀錄'}</div>
@@ -1309,7 +1101,7 @@ export default function App() {
 
                 <button 
                   onClick={() => setSelectedCustomerHistory(customer)}
-                  className="w-full py-2 bg-slate-100 hover:bg-amber-500 hover:text-white text-slate-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full py-2 bg-slate-100 hover:bg-amber-500 hover:text-white text-ink font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <History size={14} /> 查看每次住宿詳情 ({customer.bookings.length})
                 </button>
@@ -1321,34 +1113,34 @@ export default function App() {
 
       {/* 彈窗：常客歷史住宿明細 */}
       {selectedCustomerHistory && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-xl w-full  p-6 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
             <div className="flex justify-between items-center border-b pb-3">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">{selectedCustomerHistory.owner_name} 的住宿歷史檔案</h3>
-                <p className="text-xs text-slate-500">電話：{selectedCustomerHistory.owner_phone} | 累積次數：{selectedCustomerHistory.bookings.length} 次</p>
+                <h3 className="text-lg font-bold text-ink">{selectedCustomerHistory.owner_name} 的住宿歷史檔案</h3>
+                <p className="text-xs text-bark">電話：{selectedCustomerHistory.owner_phone} | 累積次數：{selectedCustomerHistory.bookings.length} 次</p>
               </div>
               <button onClick={() => setSelectedCustomerHistory(null)} className="text-slate-400 font-bold text-lg cursor-pointer">✕</button>
             </div>
 
             <div className="space-y-3">
               {selectedCustomerHistory.bookings.map((b, i) => (
-                <div key={b.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
-                  <div className="flex justify-between items-center font-bold text-slate-800">
+                <div key={b.id} className="p-3.5 bg-slate-50 rounded-xl border border-line text-xs space-y-1.5">
+                  <div className="flex justify-between items-center font-bold text-ink">
                     <span>第 {selectedCustomerHistory.bookings.length - i} 次住宿 🐾 {b.pet_name}</span>
                     <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">{b.status === 'CHECKED_OUT' ? '已退房' : b.status === 'CONFIRMED' ? '已入住' : '待派房'}</span>
                   </div>
-                  <div className="text-slate-600">
+                  <div className="text-bark">
                     📅 住宿日期：<b>{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</b>
                   </div>
                   <div className="text-emerald-700 font-semibold">
                     💰 住宿金額：${getBookingDisplayPrice(b)} 元
                   </div>
-                  <div className="text-slate-500">
+                  <div className="text-bark">
                     飲食習性：{b.hay_type || '提摩西'} / {b.feed_frequency || '未填'} / {b.water_tool || '水碗'}
                   </div>
                   {b.self_provided_items?.details && (
-                    <div className="text-slate-600 bg-white p-2 rounded border truncate">
+                    <div className="text-bark bg-white p-2 rounded border truncate">
                       自備物備註：{b.self_provided_items.details}
                     </div>
                   )}
@@ -1361,11 +1153,11 @@ export default function App() {
 
       {/* 彈窗：點選特定日期查看住客名單 */}
       {selectedDateDetail && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full  p-6 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
             <div className="flex justify-between items-center border-b pb-3">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">{selectedDateDetail.date} 住客與預約名單</h3>
+                <h3 className="text-lg font-bold text-ink">{selectedDateDetail.date} 住客與預約名單</h3>
                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${
                   selectedDateDetail.occupiedCages > 20 ? 'bg-rose-100 text-rose-700' : 'text-amber-700 bg-amber-50'
                 }`}>
@@ -1391,21 +1183,21 @@ export default function App() {
                         ? 'bg-amber-50/40 border-amber-300' 
                         : isConfirmed 
                           ? 'bg-emerald-50/30 border-emerald-200' 
-                          : 'bg-slate-50/60 border-slate-200'
+                          : 'bg-slate-50/60 border-line'
                     }`}>
                       <div className="flex justify-between items-center">
-                        <span className="font-bold text-sm text-slate-800 truncate pr-2">🐾 {b.pet_name}</span>
+                        <span className="font-bold text-sm text-ink truncate pr-2">🐾 {b.pet_name}</span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
                             onClick={(e) => handleToggleCustomerConfirmed(b, e)}
                             className={`px-2 py-0.5 rounded text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                              isConfirmed ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                              isConfirmed ? 'bg-sage text-white' : 'bg-slate-200 text-bark hover:bg-slate-300'
                             }`}
                           >
                             {isConfirmed ? <><CheckCircle2 size={11} />已確認</> : <><Circle size={11} />未確認</>}
                           </button>
-                          <button onClick={() => setEditingBooking(b)} className="px-2 py-0.5 bg-white border rounded text-slate-600 hover:text-slate-900 cursor-pointer">
+                          <button onClick={() => setEditingBooking(b)} className="px-2 py-0.5 bg-white border rounded text-bark hover:text-slate-900 cursor-pointer">
                             編輯
                           </button>
                           <button onClick={() => handleDeleteBooking(b.id)} className="px-2 py-0.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded cursor-pointer">
@@ -1413,14 +1205,14 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      <div className="text-slate-600">飼主：{b.owner_name} ({b.owner_phone})</div>
-                      <div className="text-slate-500">住宿區間：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
+                      <div className="text-bark">飼主：{b.owner_name} ({b.owner_phone})</div>
+                      <div className="text-bark">住宿區間：{formatDate(b.check_in_date)} ~ {formatDate(b.check_out_date)}</div>
                       <div className="text-emerald-700 font-bold">金額：${displayPrice} 元</div>
                       <div className="flex justify-between items-center pt-1 border-t text-[11px]">
                         <span className={isAssigned ? 'text-emerald-700 font-semibold' : 'text-amber-700 font-bold'}>
                           狀態：{isAssigned ? `${b.status === 'CHECKED_OUT' ? '已退房' : '已入住'} (籠位: ${b.assigned_rooms?.join(', ') || b.room_id || '未標註'})` : '📥 待派房預約單'}
                         </span>
-                        <span className="text-slate-500 font-medium">佔用籠數：{cagesCount} 籠</span>
+                        <span className="text-bark font-medium">佔用籠數：{cagesCount} 籠</span>
                       </div>
                     </div>
                   );
@@ -1433,10 +1225,10 @@ export default function App() {
 
       {/* 彈窗：店員現場指派籠位 */}
       {assigningBooking && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full  p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
             <div className="flex justify-between items-center border-b pb-2">
-              <h3 className="text-lg font-bold text-slate-800">為【{assigningBooking.pet_name}】拍照點收並派房</h3>
+              <h3 className="text-lg font-bold text-ink">為【{assigningBooking.pet_name}】拍照點收並派房</h3>
               <button onClick={() => setAssigningBooking(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
 
@@ -1453,7 +1245,7 @@ export default function App() {
               <label className="block text-xs font-bold text-rose-600 mb-1 flex items-center gap-1">
                 <Camera size={14} /> 現場拍照點收 (必拍項目)*
               </label>
-              <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} className="w-full text-xs text-slate-500" />
+              <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} className="w-full text-xs text-bark" />
               {uploading && <p className="text-xs text-amber-600 mt-1">壓縮上傳中...</p>}
               
               <div className="flex gap-2 mt-2 overflow-x-auto">
@@ -1468,7 +1260,7 @@ export default function App() {
 
             {/* 空籠選擇 */}
             <div className="border-t pt-3">
-              <label className="block text-xs font-bold text-slate-700 mb-1">
+              <label className="block text-xs font-bold text-ink mb-1">
                 選擇空籠位 (若分籠可複選)：
               </label>
               <div className="grid grid-cols-4 gap-2">
@@ -1490,9 +1282,9 @@ export default function App() {
                       }}
                       className={`p-2.5 rounded-xl border text-xs font-bold transition cursor-pointer flex flex-col items-center gap-0.5 ${
                         isSelected 
-                          ? 'bg-emerald-600 text-white border-emerald-600' 
+                          ? 'bg-sage text-white border-emerald-600' 
                           : isVacant 
-                            ? 'bg-slate-50 text-slate-700 border-slate-200 hover:border-emerald-300' 
+                            ? 'bg-slate-50 text-ink border-line hover:border-emerald-300' 
                             : 'bg-rose-50/60 text-slate-300 border-rose-100 cursor-not-allowed opacity-60'
                       }`}
                     >
@@ -1506,7 +1298,7 @@ export default function App() {
 
             <button
               onClick={handleConfirmAssign}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition cursor-pointer"
+              className="w-full bg-emerald-600 hover:bg-[#244a30] text-white font-bold py-3 rounded-xl transition cursor-pointer"
             >
               確認拍照並完成入住
             </button>
@@ -1516,8 +1308,8 @@ export default function App() {
 
       {/* 彈窗：修改預約單內容 */}
       {editingBooking && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <form onSubmit={handleSaveEditBooking} className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <form onSubmit={handleSaveEditBooking} className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full  p-6 shadow-xl max-h-[90vh] overflow-y-auto space-y-4">
             <div className="flex justify-between items-center border-b pb-2">
               <h3 className="text-base font-bold">✏️ 修改預約單資料</h3>
               <button type="button" onClick={() => setEditingBooking(null)} className="text-slate-400 cursor-pointer">✕</button>
@@ -1568,8 +1360,8 @@ export default function App() {
             </div>
 
             <div className="flex gap-2 pt-2">
-              <button type="button" onClick={() => setEditingBooking(null)} className="w-1/2 py-2 text-xs text-slate-500 border rounded-xl cursor-pointer">取消</button>
-              <button type="submit" className="w-1/2 py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl cursor-pointer">儲存修改</button>
+              <button type="button" onClick={() => setEditingBooking(null)} className="w-1/2 py-2 text-xs text-bark border rounded-xl cursor-pointer">取消</button>
+              <button type="submit" className="w-1/2 py-2 bg-sage text-white text-xs font-bold rounded-xl cursor-pointer">儲存修改</button>
             </div>
           </form>
         </div>
@@ -1577,10 +1369,10 @@ export default function App() {
 
       {/* 彈窗：籠位詳情 */}
       {selectedRoom && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-center items-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-lg w-full  p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3 mb-4">
-              <h2 className="text-xl font-bold text-slate-800">籠位 {String(selectedRoom.id).padStart(2, '0')} 號</h2>
+              <h2 className="text-xl font-bold text-ink">籠位 {String(selectedRoom.id).padStart(2, '0')} 號</h2>
               <button onClick={() => { setSelectedRoom(null); setShowSwapModal(false); setShowRescheduleModal(false); }} className="text-slate-400 text-xl font-bold cursor-pointer">✕</button>
             </div>
 
@@ -1588,13 +1380,13 @@ export default function App() {
               <div className="space-y-4 text-sm">
                 <div className="bg-amber-50/60 p-4 rounded-xl border border-amber-200/60 space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-base font-bold text-slate-800">🐾 {currentBooking.pet_name}</span>
+                    <span className="text-base font-bold text-ink">🐾 {currentBooking.pet_name}</span>
                     <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-semibold">{currentBooking.pet_gender}</span>
                   </div>
-                  <div className="text-slate-600 flex items-center gap-2">
+                  <div className="text-bark flex items-center gap-2">
                     <User size={14} /> 飼主：{currentBooking.owner_name} ({currentBooking.owner_phone})
                   </div>
-                  <div className="text-slate-500 text-xs">
+                  <div className="text-bark text-xs">
                     📅 住宿日期：{formatDate(currentBooking.check_in_date)} ~ {formatDate(currentBooking.check_out_date)}
                   </div>
                   <div className="text-emerald-700 font-bold">
@@ -1604,20 +1396,20 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">飲水</span><b className="text-slate-700 text-sm">{currentBooking.water_tool}</b></div>
-                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">飼料</span><b className="text-slate-700 text-sm">{currentBooking.feed_frequency}</b></div>
-                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">主食草</span><b className="text-slate-700 text-sm">{currentBooking.hay_type}</b></div>
+                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">飲水</span><b className="text-ink text-sm">{currentBooking.water_tool}</b></div>
+                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">飼料</span><b className="text-ink text-sm">{currentBooking.feed_frequency}</b></div>
+                  <div className="bg-slate-100 p-2 rounded-lg"><span className="block text-slate-400">主食草</span><b className="text-ink text-sm">{currentBooking.hay_type}</b></div>
                 </div>
 
                 {/* 自備物品與照護備註 */}
                 <div className="bg-slate-50 p-3 rounded-xl border space-y-1">
-                  <div className="font-semibold text-slate-700 flex items-center gap-1 mb-1"><Package size={15}/> 物品清單與特殊備註：</div>
-                  <div className="text-slate-600 whitespace-pre-wrap bg-white p-2.5 rounded border text-xs">{currentBooking.self_provided_items?.details || '未填寫'}</div>
+                  <div className="font-semibold text-ink flex items-center gap-1 mb-1"><Package size={15}/> 物品清單與特殊備註：</div>
+                  <div className="text-bark whitespace-pre-wrap bg-white p-2.5 rounded border text-xs">{currentBooking.self_provided_items?.details || '未填寫'}</div>
                 </div>
 
                 {currentBooking.photo_urls && currentBooking.photo_urls.length > 0 && (
                   <div>
-                    <div className="font-semibold text-slate-700 flex items-center gap-1 mb-2"><Camera size={15}/> 點收照片：</div>
+                    <div className="font-semibold text-ink flex items-center gap-1 mb-2"><Camera size={15}/> 點收照片：</div>
                     <div className="grid grid-cols-3 gap-2">
                       {currentBooking.photo_urls.map((url, idx) => (
                         <a key={idx} href={url} target="_blank" rel="noreferrer">
@@ -1644,12 +1436,12 @@ export default function App() {
                     <div className="p-3.5 bg-emerald-50/80 rounded-xl border border-emerald-300 space-y-3">
                       <div className="flex justify-between items-center text-xs font-bold text-emerald-900 border-b pb-1.5">
                         <span className="flex items-center gap-1"><CalendarClock size={14}/> 調整住客住宿時間</span>
-                        <button onClick={() => setShowRescheduleModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">取消</button>
+                        <button onClick={() => setShowRescheduleModal(false)} className="text-slate-400 hover:text-bark cursor-pointer">取消</button>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 text-xs">
                         <div>
-                          <label className="block text-slate-600 font-semibold mb-1">新入住日：</label>
+                          <label className="block text-bark font-semibold mb-1">新入住日：</label>
                           <input 
                             type="date" 
                             className="w-full border rounded-lg p-1.5 bg-white text-xs" 
@@ -1658,7 +1450,7 @@ export default function App() {
                           />
                         </div>
                         <div>
-                          <label className="block text-slate-600 font-semibold mb-1">新退房日：</label>
+                          <label className="block text-bark font-semibold mb-1">新退房日：</label>
                           <input 
                             type="date" 
                             className="w-full border rounded-lg p-1.5 bg-white text-xs" 
@@ -1671,7 +1463,7 @@ export default function App() {
                       {/* 差額提醒看板 */}
                       {rescheduleDiffInfo.days > 0 ? (
                         <div className="bg-white p-2.5 rounded-lg border border-emerald-200 text-xs space-y-1">
-                          <div className="flex justify-between text-slate-600">
+                          <div className="flex justify-between text-bark">
                             <span>調整後天數：<b>{rescheduleDiffInfo.days} 天</b></span>
                             <span>新總費用：<b>${rescheduleDiffInfo.newTotal} 元</b></span>
                           </div>
@@ -1686,7 +1478,7 @@ export default function App() {
                                 💸 費用縮減：-${Math.abs(rescheduleDiffInfo.diff)} 元
                               </span>
                             ) : (
-                              <span className="text-slate-500">金額無變動</span>
+                              <span className="text-bark">金額無變動</span>
                             )}
                           </div>
                         </div>
@@ -1696,7 +1488,7 @@ export default function App() {
 
                       <button
                         onClick={handleSaveReschedule}
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs transition cursor-pointer shadow-xs"
+                        className="w-full bg-emerald-600 hover:bg-[#244a30] text-white font-bold py-2 rounded-lg text-xs transition cursor-pointer shadow-xs"
                       >
                         確認變更時間並同步行事曆
                       </button>
@@ -1712,15 +1504,15 @@ export default function App() {
                         setShowSwapModal(true);
                         setShowRescheduleModal(false);
                       }}
-                      className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                      className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-ink font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                     >
                       <ArrowLeftRight size={14} /> 籠位搬遷或互換籠子...
                     </button>
                   ) : (
                     <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 space-y-2">
-                      <div className="flex justify-between items-center text-xs font-bold text-slate-700">
+                      <div className="flex justify-between items-center text-xs font-bold text-ink">
                         <span>選擇要搬入或對調的目標籠位：</span>
-                        <button onClick={() => setShowSwapModal(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">取消</button>
+                        <button onClick={() => setShowSwapModal(false)} className="text-slate-400 hover:text-bark cursor-pointer">取消</button>
                       </div>
                       <select 
                         className="w-full border rounded-lg p-2 text-xs bg-white"
@@ -1736,7 +1528,7 @@ export default function App() {
                       </select>
                       <button
                         onClick={handleExecuteSwap}
-                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 rounded-lg text-xs transition cursor-pointer"
+                        className="w-full bg-carrot hover:bg-carrot-dark text-white font-bold py-2 rounded-lg text-xs transition cursor-pointer"
                       >
                         確認執行換籠 / 互換
                       </button>
@@ -1744,7 +1536,7 @@ export default function App() {
                   )}
                 </div>
 
-                <button onClick={handleCheckOut} className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-2.5 rounded-xl transition cursor-pointer">
+                <button onClick={handleCheckOut} className="w-full bg-carrot hover:bg-carrot-dark text-white font-bold py-3.5 rounded-2xl transition cursor-pointer">
                   辦理退房點收 (清理照片並釋放房間)
                 </button>
               </div>
@@ -1756,7 +1548,7 @@ export default function App() {
                 <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 text-rose-800">
                   ⚠️ 這個籠位標示為「有住客」，但找不到對應的預約單資料（可能已被刪除）。
                 </div>
-                <button onClick={handleCheckOut} className="w-full bg-rose-500 hover:bg-rose-600 text-white font-bold py-2.5 rounded-xl transition cursor-pointer">
+                <button onClick={handleCheckOut} className="w-full bg-carrot hover:bg-carrot-dark text-white font-bold py-3.5 rounded-2xl transition cursor-pointer">
                   強制釋放此籠位
                 </button>
               </div>
@@ -1767,8 +1559,8 @@ export default function App() {
 
       {/* 顧客提示視窗：客滿 / 送出成功 */}
       {customerNotice && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl space-y-4 text-sm text-slate-700">
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm flex justify-center items-end sm:items-center sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-sm w-full  p-6 shadow-xl space-y-4 text-sm text-ink">
             {customerNotice.type === 'full' ? (
               <>
                 <h3 className="text-lg font-bold text-rose-700">目前住宿已滿</h3>
@@ -1793,12 +1585,13 @@ export default function App() {
             <a href={LINE_URL} target="_blank" rel="noopener noreferrer" className="block text-center bg-[#06C755] text-white font-bold py-3 rounded-xl">
               用 LINE 聯繫我們
             </a>
-            <button onClick={() => setCustomerNotice(null)} className="w-full py-2.5 text-slate-500 font-semibold cursor-pointer">
+            <button onClick={() => setCustomerNotice(null)} className="w-full py-2.5 text-bark font-semibold cursor-pointer">
               關閉
             </button>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
